@@ -1,0 +1,42 @@
+# Render Blueprint for the Lemony backend: one Docker web service (plain
+# uvicorn). MySQL is provisioned separately and wired in through DB_* below.
+# REDIS_ENABLED=false keeps live games in MySQL (single instance only).
+services:
+  - type: web
+    name: lemony-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /api/v1/health
+    # Render deploys a push to the linked branch only once every GitHub check
+    # on that commit has passed -- this IS the CI gate. There is deliberately no
+    # deploy job or deploy hook in ci.yml: with both, a passing push deploys
+    # twice, and with plain on-commit auto-deploy a failing push ships anyway.
+    autoDeployTrigger: checksPass
+    preDeployCommand: alembic upgrade head
+    envVars:
+      - key: DEBUG
+        value: "false"
+      - key: CORS_ORIGINS
+        value: '["https://lemonysim.web.app","http://localhost:5173"]'
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_DATABASE
+        sync: false
+      - key: DB_REQUIRE_SSL
+        sync: false
+      # "false": live games in MySQL; run exactly one instance.
+      - key: REDIS_ENABLED
+        value: "false"
+      - key: REDIS_URL
+        sync: false
+      # One line, single-quoted or unquoted.
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
