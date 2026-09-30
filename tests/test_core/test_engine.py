@@ -75,17 +75,17 @@ def test_hazard_fresh_ramp():
 def test_ice_gone_first_night_and_cups_never():
     rng = random.Random(1)
     ice = Ingredient("ice", 0.05, 0, 1, False, [Batch(100)])
-    assert ice.end_of_day_perish(rng) == 100 and ice.total() == 0
+    assert ice.end_of_day_perish(rng) == (100, pytest.approx(5.0)) and ice.total() == 0
     cups = Ingredient("cups", 0.05, 30, 31, True, [Batch(100)])
     for _ in range(60):
-        assert cups.end_of_day_perish(rng) == 0
+        assert cups.end_of_day_perish(rng) == (0, 0.0)
     assert cups.total() == 100
 
 
 def test_sugar_all_gone_by_max_days():
     rng = random.Random(2)
     sugar = Ingredient("sugar", 0.1, 5, 10, False, [Batch(500)])
-    lost = [sugar.end_of_day_perish(rng) for _ in range(10)]
+    lost = [sugar.end_of_day_perish(rng)[0] for _ in range(10)]
     assert lost[:5] == [0] * 5
     assert sum(lost) == 500
 
@@ -94,6 +94,63 @@ def test_fifo_consume():
     ing = Ingredient("lemons", 0.1, 3, 7, False, [Batch(5, age=3), Batch(10, age=0)])
     ing.consume(7)
     assert [(b.qty, b.age) for b in ing.batches] == [(8, 0)]
+
+
+def test_consume_and_perish_valued_at_price_paid():
+    ing = Ingredient("lemons", 0.1, 0, 1, False, [Batch(5, age=0, unit_cost=0.08), Batch(10, age=0)])
+    assert ing.consume(7) == pytest.approx(5 * 0.08 + 2 * 0.1)
+    lost, value = ing.end_of_day_perish(random.Random(0))
+    assert lost == 8 and value == pytest.approx(0.8)
+
+
+# ---------------------------------------------------------------- packs
+def test_pack_price_applies_its_discount():
+    lemons = cfg().ingredients["lemons"]
+    pack = lemons.pack(500)
+    assert pack is not None and pack.discount == pytest.approx(0.2)
+    assert lemons.pack_price(pack) == pytest.approx(60.0)  # 500 x 0.15 x 0.8
+    assert lemons.pack(75) is None
+
+
+def test_legacy_pack_sizes_read_as_undiscounted_packs():
+    data = default_config()
+    for ing in data["ingredients"].values():
+        del ing["packs"]
+        ing["pack_sizes"] = [100, 50]
+    lemons = GameConfig.model_validate(data).ingredients["lemons"]
+    assert [(p.size, p.discount) for p in lemons.packs] == [(50, 0.0), (100, 0.0)]
+
+
+@pytest.mark.parametrize(
+    "packs, message",
+    [
+        ([{"size": 50, "discount": 0.95}], "between 0% and 90%"),
+        ([{"size": 50, "discount": -0.1}], "between 0% and 90%"),
+        ([{"size": 0, "discount": 0}], "between 1 and 10000"),
+        ([{"size": 50, "discount": 0}, {"size": 50, "discount": 0.1}], "distinct"),
+        ([], "at least 1"),
+    ],
+)
+def test_bad_packs_rejected(packs, message):
+    data = default_config()
+    data["ingredients"]["sugar"]["packs"] = packs
+    with pytest.raises(ValidationError, match=message):
+        GameConfig.model_validate(data)
+
+
+def test_purchase_uses_pack_discounts_and_cost_per_cup_uses_price_paid():
+    game = LemonadeGame(cfg(), seed=11)
+    cost, units, lots = game.purchase_cost({"lemons": {"500": 1, "50": 2}})
+    assert units["lemons"] == 600
+    assert cost == pytest.approx(60.0 + 2 * 7.5)
+    assert lots["lemons"] == [(100, pytest.approx(0.15)), (500, pytest.approx(0.12))]
+
+    big = {name: {"500": 1} for name in ("ice", "sugar", "lemons", "cups")}
+    game = LemonadeGame(cfg(starting_cash=500), seed=11)
+    record = game.run_day(plan(purchases=big))["record"]
+    assert record["buyers"] > 0
+    # Everything came from 20%-off packs, so a cup costs 80% of list price.
+    assert record["cost_per_cup"] == pytest.approx(0.8 * game.list_cost_per_cup(record["recipe"]), abs=0.01)
 
 
 # --------------------------------------------------------------- demand
@@ -169,8 +226,8 @@ def test_stock_out_produces_sold_out():
 def test_money_and_inventory_accounting():
     game = LemonadeGame(cfg(), seed=9)
     rec = game.run_day(plan())["record"]
-    assert rec["spend"] == pytest.approx(35.0)
-    assert rec["cash_end"] == pytest.approx(50 - 35 + rec["revenue"])
+    assert rec["spend"] == pytest.approx(35.0 * 0.95)  # four 100-packs at 5% off
+    assert rec["cash_end"] == pytest.approx(50 - rec["spend"] + rec["revenue"])
     assert rec["revenue"] == pytest.approx(rec["buyers"] * 0.6)
     assert rec["perished"]["ice"] == 100 - rec["buyers"] * 2  # all remaining ice melts
     assert rec["perished"]["cups"] == 0

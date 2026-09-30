@@ -1,0 +1,123 @@
+{
+  "_comment": "Shared money-rounding cases. Keep identical in Lemony_Backend/tests/fixtures and Lemony_Frontend/src/__tests__/fixtures.",
+  "round_cents": [
+    {
+      "value": 0.125,
+      "expected": 0.13
+    },
+    {
+      "value": 0.135,
+      "expected": 0.14
+    },
+    {
+      "value": 0.145,
+      "expected": 0.15
+    },
+    {
+      "value": 1.005,
+      "expected": 1.01
+    },
+    {
+      "value": 2.675,
+      "expected": 2.68
+    },
+    {
+      "value": 1.255,
+      "expected": 1.26
+    },
+    {
+      "value": 0.124999,
+      "expected": 0.12
+    },
+    {
+      "value": 0.0049,
+      "expected": 0.0
+    },
+    {
+      "value": 0.005,
+      "expected": 0.01
+    },
+    {
+      "value": -0.125,
+      "expected": -0.13
+    },
+    {
+      "value": -2.675,
+      "expected": -2.68
+    },
+    {
+      "value": -0.004,
+      "expected": 0.0
+    },
+    {
+      "value": 0.0,
+      "expected": 0.0
+    },
+    {
+      "value": 12345.675,
+      "expected": 12345.68
+    },
+    {
+      "value": 999999.995,
+      "expected": 1000000.0
+    },
+    {
+      "value": 33.25,
+      "expected": 33.25
+    },
+    {
+      "value": 0.30000000000000004,
+      "expected": 0.3
+    }
+  ],
+  "pack_price": [
+    {
+      "size": 3,
+      "unit_cost": 0.07,
+      "discount": 0.1,
+      "expected": 0.19
+    },
+    {
+      "size": 500,
+      "unit_cost": 0.15,
+      "discount": 0.2,
+      "expected": 60.0
+    },
+    {
+      "size": 100,
+      "unit_cost": 0.05,
+      "discount": 0.05,
+      "expected": 4.75
+    },
+    {
+      "size": 25,
+      "unit_cost": 0.01,
+      "discount": 0.5,
+      "expected": 0.13
+    },
+    {
+      "size": 7,
+      "unit_cost": 0.15,
+      "discount": 0.5,
+      "expected": 0.53
+    },
+    {
+      "size": 1,
+      "unit_cost": 0.25,
+      "discount": 0.5,
+      "expected": 0.13
+    },
+    {
+      "size": 333,
+      "unit_cost": 0.03,
+      "discount": 0.0,
+      "expected": 9.99
+    },
+    {
+      "size": 10000,
+      "unit_cost": 99.99,
+      "discount": 0.9,
+      "expected": 99990.0
+    }
+  ]
+}

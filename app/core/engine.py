@@ -21,6 +21,7 @@ from .config_model import GameConfig
 from .defaults import INGREDIENT_NAMES, PERSON_TYPES, RECIPE_INGREDIENTS
 from .demand import buy_probability, buy_scores, expected_spawn, poisson, refusal_reason
 from .ingredients import Ingredient
+from .money import round_cents
 from .people import PersonType, build_people
 from .weather import roll_day_weather
 
@@ -42,7 +43,7 @@ class DayPlan(BaseModel):
 
 
 def _money(value: float) -> float:
-    return round(value + 0.0, 2)
+    return round_cents(value)
 
 
 class LemonadeGame:
@@ -67,9 +68,16 @@ class LemonadeGame:
         return roll_day_weather(self.config, self._rng(day, "weather"))
 
     # --------------------------------------------------------------- pricing
-    def purchase_cost(self, purchases: dict[str, dict[str, int]]) -> tuple[float, dict[str, int]]:
-        """Validate purchases; return (cost, units per ingredient)."""
+    def purchase_cost(
+        self, purchases: dict[str, dict[str, int]]
+    ) -> tuple[float, dict[str, int], dict[str, list[tuple[int, float]]]]:
+        """Validate purchases; return (cost, units per ingredient, lots).
+
+        Each pack size is priced with its own discount, so every size bought
+        becomes its own lot of ``(units, unit price paid)``.
+        """
         units: dict[str, int] = {name: 0 for name in INGREDIENT_NAMES}
+        lots: dict[str, list[tuple[int, float]]] = {name: [] for name in INGREDIENT_NAMES}
         cost = 0.0
         for name, packs in purchases.items():
             if name not in self.config.ingredients:
@@ -80,22 +88,32 @@ class LemonadeGame:
                     size = int(size_key)
                 except (TypeError, ValueError):
                     raise PlanError(f"Invalid pack size for {name}: {size_key}") from None
-                if size not in cfg.pack_sizes:
+                pack = cfg.pack(size)
+                if pack is None:
                     raise PlanError(f"{name} is not sold in packs of {size}")
                 if not 0 <= count <= MAX_PACKS_PER_SIZE:
                     raise PlanError(f"Pack count for {name} must be 0-{MAX_PACKS_PER_SIZE}")
+                if count == 0:
+                    continue
+                price = cfg.pack_price(pack)
                 units[name] += size * count
-                cost += size * count * cfg.unit_cost
-        return _money(cost), units
+                cost += price * count
+                lots[name].append((size * count, price / size))
+        for name_lots in lots.values():
+            name_lots.sort(key=lambda lot: -lot[1])  # same-day lots: dearest used first, cheapest kept longest
+        return _money(cost), units, lots
 
-    def cost_per_cup(self, recipe: dict[str, int]) -> float:
+    def list_cost_per_cup(self, recipe: dict[str, int]) -> float:
+        """A cup priced at undiscounted unit costs."""
         ing = self.config.ingredients
         return _money(
             sum(recipe[name] * ing[name].unit_cost for name in RECIPE_INGREDIENTS)
             + ing["cups"].unit_cost
         )
 
-    def _validate_plan(self, plan: DayPlan) -> tuple[float, dict[str, int]]:
+    def _validate_plan(
+        self, plan: DayPlan
+    ) -> tuple[float, dict[str, int], dict[str, list[tuple[int, float]]]]:
         mm = self.config.min_max_values
         if not mm.price.min <= plan.price <= mm.price.max:
             raise PlanError(f"Price must be between {mm.price.min:.2f} and {mm.price.max:.2f}")
@@ -105,10 +123,10 @@ class LemonadeGame:
             rng = getattr(mm, name)
             if not rng.min <= plan.recipe[name] <= rng.max:
                 raise PlanError(f"{name} per cup must be between {rng.min} and {rng.max}")
-        cost, units = self.purchase_cost(plan.purchases)
+        cost, units, lots = self.purchase_cost(plan.purchases)
         if cost > self.cash + 1e-9:
             raise PlanError(f"Purchases cost ${cost:.2f} but you only have ${self.cash:.2f}")
-        return cost, units
+        return cost, units, lots
 
     # ------------------------------------------------------------------ day
     def _can_make_cup(self, recipe: dict[str, int]) -> bool:
@@ -116,21 +134,22 @@ class LemonadeGame:
             return False
         return all(self.inventory[name].total() >= recipe[name] for name in RECIPE_INGREDIENTS)
 
-    def _make_cup(self, recipe: dict[str, int]) -> None:
-        for name in RECIPE_INGREDIENTS:
-            self.inventory[name].consume(recipe[name])
-        self.inventory["cups"].consume(1)
+    def _make_cup(self, recipe: dict[str, int]) -> float:
+        """Use one cup's ingredients, oldest stock first; return what they cost."""
+        cost = sum(self.inventory[name].consume(recipe[name]) for name in RECIPE_INGREDIENTS)
+        return cost + self.inventory["cups"].consume(1)
 
     def run_day(self, plan: DayPlan) -> dict[str, Any]:
         if self.phase != "planning":
             raise PlanError("This day has already been played")
-        spend, units = self._validate_plan(plan)
+        spend, units, lots = self._validate_plan(plan)
         recipe = {name: int(plan.recipe[name]) for name in RECIPE_INGREDIENTS}
         price = _money(plan.price)
 
         self.cash = _money(self.cash - spend)
-        for name, qty in units.items():
-            self.inventory[name].add(qty)
+        for name, name_lots in lots.items():
+            for qty, unit_cost in name_lots:
+                self.inventory[name].add(qty, unit_cost)
 
         weather, temperature = self.weather_for_day(self.day)
         multiplier = self.config.weather_multipliers[weather]
@@ -142,6 +161,7 @@ class LemonadeGame:
         by_hour: list[dict[str, Any]] = []
         reasons: dict[str, int] = {}
         revenue = 0.0
+        ingredients_used = 0.0
 
         for hour in range(mm.hour.min, mm.hour.max + 1):
             arrivals: list[PersonType] = []
@@ -157,7 +177,7 @@ class LemonadeGame:
                 wants = rng.random() < probability
                 reason = None
                 if wants and self._can_make_cup(recipe):
-                    self._make_cup(recipe)
+                    ingredients_used += self._make_cup(recipe)
                     revenue += price
                     outcome = "bought"
                     by_type[person.kind]["buyers"] += 1
@@ -185,10 +205,9 @@ class LemonadeGame:
 
         revenue = _money(revenue)
         perish_rng = self._rng(self.day, "perish")
-        perished = {name: self.inventory[name].end_of_day_perish(perish_rng) for name in INGREDIENT_NAMES}
-        perished_value = _money(
-            sum(qty * self.config.ingredients[name].unit_cost for name, qty in perished.items())
-        )
+        losses = {name: self.inventory[name].end_of_day_perish(perish_rng) for name in INGREDIENT_NAMES}
+        perished = {name: lost for name, (lost, _) in losses.items()}
+        perished_value = _money(sum(value for _, value in losses.values()))
         self.cash = _money(self.cash + revenue)
 
         visitors = len(events)
@@ -199,7 +218,8 @@ class LemonadeGame:
             "temperature": temperature,
             "price": price,
             "recipe": recipe,
-            "cost_per_cup": self.cost_per_cup(recipe),
+            # What the cups sold actually cost (discounts included); list price if none sold.
+            "cost_per_cup": _money(ingredients_used / buyers) if buyers else self.list_cost_per_cup(recipe),
             "purchased": units,
             "spend": spend,
             "revenue": revenue,

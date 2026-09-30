@@ -11,6 +11,9 @@ per batch, with a "fresh period + linear ramp" hazard:
 
 With ``fresh_days = 0`` this is exactly the original rule ``d / time_alive``.
 The number of units lost in a batch is Binomial(qty, hazard).
+
+Each batch also remembers the unit price actually paid for it (packs can be
+discounted), so using or losing stock is valued at what it cost.
 """
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ from .config_model import IngredientConfig
 class Batch:
     qty: int
     age: int = 0
+    # Price paid per unit; None means "list price" (batches saved before pack discounts).
+    unit_cost: float | None = None
 
 
 class Ingredient:
@@ -61,26 +66,33 @@ class Ingredient:
     def total(self) -> int:
         return sum(b.qty for b in self.batches)
 
-    def add(self, qty: int) -> None:
-        if qty > 0:
-            self.batches.append(Batch(qty=qty, age=0))
+    def paid(self, batch: Batch) -> float:
+        return self.unit_cost if batch.unit_cost is None else batch.unit_cost
 
-    def consume(self, qty: int) -> None:
-        """Remove ``qty`` units, oldest batch first. Caller checks ``total()`` first."""
+    def add(self, qty: int, unit_cost: float | None = None) -> None:
+        if qty > 0:
+            self.batches.append(Batch(qty=qty, age=0, unit_cost=unit_cost))
+
+    def consume(self, qty: int) -> float:
+        """Remove ``qty`` units, oldest batch first; return what they cost. Caller checks ``total()`` first."""
         if qty > self.total():
             raise ValueError(f"not enough {self.name}")
         remaining = qty
+        cost = 0.0
         for batch in self.batches:
             take = min(batch.qty, remaining)
             batch.qty -= take
+            cost += take * self.paid(batch)
             remaining -= take
             if remaining == 0:
                 break
         self.batches = [b for b in self.batches if b.qty > 0]
+        return cost
 
-    def end_of_day_perish(self, rng: random.Random) -> int:
-        """Age every batch by a day, drop perished units, return how many were lost."""
+    def end_of_day_perish(self, rng: random.Random) -> tuple[int, float]:
+        """Age every batch by a day, drop perished units, return (units lost, what they cost)."""
         lost = 0
+        value = 0.0
         for batch in self.batches:
             batch.age += 1
             p = self.hazard(batch.age)
@@ -92,22 +104,28 @@ class Ingredient:
                 gone = sum(1 for _ in range(batch.qty) if rng.random() < p)
             batch.qty -= gone
             lost += gone
+            value += gone * self.paid(batch)
         self.batches = [b for b in self.batches if b.qty > 0]
-        return lost
+        return lost, value
 
     def expected_loss_tonight(self) -> float:
         """Expected units lost at the next check, if nothing is sold today."""
         return sum(b.qty * self.hazard(b.age + 1) for b in self.batches)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"batches": [{"qty": b.qty, "age": b.age} for b in self.batches]}
+        return {"batches": [{"qty": b.qty, "age": b.age, "unit_cost": self.paid(b)} for b in self.batches]}
 
     def view(self) -> dict[str, Any]:
         """Client-facing inventory line."""
         return {
             "total": self.total(),
             "batches": [
-                {"qty": b.qty, "age": b.age, "risk_tonight": round(self.hazard(b.age + 1), 4)}
+                {
+                    "qty": b.qty,
+                    "age": b.age,
+                    "unit_cost": round(self.paid(b), 6),
+                    "risk_tonight": round(self.hazard(b.age + 1), 4),
+                }
                 for b in self.batches
             ],
             "expected_loss_tonight": round(self.expected_loss_tonight(), 2),
@@ -116,5 +134,12 @@ class Ingredient:
     @classmethod
     def from_dict(cls, name: str, cfg: IngredientConfig, data: dict[str, Any]) -> Ingredient:
         ing = cls.from_config(name, cfg)
-        ing.batches = [Batch(qty=int(b["qty"]), age=int(b["age"])) for b in data.get("batches", [])]
+        ing.batches = [
+            Batch(
+                qty=int(b["qty"]),
+                age=int(b["age"]),
+                unit_cost=None if b.get("unit_cost") is None else float(b["unit_cost"]),
+            )
+            for b in data.get("batches", [])
+        ]
         return ing

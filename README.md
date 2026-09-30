@@ -47,5 +47,7 @@ Tests run on SQLite and never read `.env`:
 
 - **Spawn.** Each hour, the number of arrivals of each person type is `Poisson(base × (1 + mean(weather_match, hour_kernel, temp_kernel)) × weather_multiplier)`.
 - **Buying.** The chance a customer buys is `mean(price, ice, sugar, lemons)` triangle-kernel scores. The price score is symmetric, so a cup that is too cheap is penalised as well.
+- **Packs.** Each ingredient is sold in packs, and each pack size has its own discount: `pack price = size × unit_cost × (1 − discount)`, rounded to the cent. Every batch remembers the unit price paid, so the day's `cost_per_cup` (ingredients used ÷ cups sold) and `perished_value` reflect discounts.
+- **Money rounding.** Every money value rounds to whole cents, halves away from zero, after trimming float noise (`app/core/money.py`). The frontend's `src/utils/money.ts` uses the same rule, and both test suites run the same cases in `tests/fixtures/rounding_cases.json` (copied in the frontend repo).
 - **Perishing.** Each purchase batch has a fresh period followed by a linear ramp: `hazard(age) = 0` while `age ≤ fresh_days`, `1` once `age ≥ max_days`, and `(age − fresh)/(max − fresh)` in between. Units are lost binomially at the end of each day.
 - **Weather.** Each day's temperature is drawn uniformly from the configured range. The weather is whichever type's temperature range contains it.

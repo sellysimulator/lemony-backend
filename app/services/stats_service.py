@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -40,6 +40,6 @@ def recompute_user_stats(db: Session, user_id: int) -> UserStats:
     stats.total_visitors = int(visitors)
     stats.total_profit = Decimal(str(profit))
     stats.best_profit = Decimal(str(best)) if best is not None else None
-    stats.avg_profit = (Decimal(str(profit)) / games).quantize(Decimal("0.01")) if games else None
+    stats.avg_profit = (Decimal(str(profit)) / games).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if games else None
     stats.best_game_id = best_game_id
     return stats

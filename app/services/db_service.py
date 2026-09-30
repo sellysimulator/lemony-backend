@@ -18,6 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.money import round_cents
+
 from ..core.defaults import INGREDIENT_NAMES, PERSON_TYPES
 from ..models.game import Game, GameConfigRow, GameDay, GameDayHour, GameDayType
 from .stats_service import recompute_user_stats
@@ -28,7 +30,7 @@ _users = UserService()
 
 
 def _money(value: float) -> Decimal:
-    return Decimal(str(round(float(value), 2)))
+    return Decimal(str(round_cents(float(value))))
 
 
 def _dt(value: str) -> datetime:

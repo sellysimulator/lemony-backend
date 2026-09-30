@@ -9,7 +9,7 @@ sentence the configuration screen shows verbatim.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -20,6 +20,7 @@ from .defaults import (
     RECIPE_INGREDIENTS,
     WEATHER_TYPES,
 )
+from .money import round_cents
 
 Weather = Literal["sunny", "cloudy", "rainy", "snowy"]
 
@@ -86,21 +87,55 @@ class PersonPreferences(_Strict):
     preferred_hour: int
 
 
+MAX_PACK_DISCOUNT = 0.9
+
+
+class PackOption(_Strict):
+    """One pack on sale: ``size`` units at ``unit_cost`` each, less ``discount`` (0-0.9)."""
+
+    size: int
+    discount: float = 0.0
+
+    @model_validator(mode="after")
+    def _bounds(self) -> PackOption:
+        if not 1 <= self.size <= 10_000:
+            raise ValueError("pack sizes must be between 1 and 10000 units")
+        if not 0 <= self.discount <= MAX_PACK_DISCOUNT:
+            raise ValueError(f"pack discounts must be between 0% and {MAX_PACK_DISCOUNT:.0%}")
+        return self
+
+
 class IngredientConfig(_Strict):
     unit_cost: float = Field(ge=0, le=100)
-    pack_sizes: list[int] = Field(min_length=1, max_length=8)
+    packs: list[PackOption] = Field(min_length=1, max_length=8)
     fresh_days: int = Field(ge=0, le=60)
     max_days: int = Field(ge=1, le=61)
     never_perishes: bool = False
 
-    @field_validator("pack_sizes")
+    @model_validator(mode="before")
     @classmethod
-    def _packs(cls, value: list[int]) -> list[int]:
-        if any(size < 1 or size > 10_000 for size in value):
-            raise ValueError("pack sizes must be between 1 and 10000 units")
-        if len(set(value)) != len(value):
+    def _legacy_pack_sizes(cls, data: Any) -> Any:
+        """Configs saved before pack discounts carry ``pack_sizes: [int]``; read them as undiscounted packs."""
+        if isinstance(data, dict) and "pack_sizes" in data and "packs" not in data:
+            sizes = data["pack_sizes"]
+            data = {k: v for k, v in data.items() if k != "pack_sizes"}
+            data["packs"] = [{"size": size, "discount": 0.0} for size in sizes] if isinstance(sizes, list) else sizes
+        return data
+
+    @field_validator("packs")
+    @classmethod
+    def _packs(cls, value: list[PackOption]) -> list[PackOption]:
+        sizes = [p.size for p in value]
+        if len(set(sizes)) != len(sizes):
             raise ValueError("pack sizes must be distinct")
-        return sorted(value)
+        return sorted(value, key=lambda p: p.size)
+
+    def pack(self, size: int) -> PackOption | None:
+        return next((p for p in self.packs if p.size == size), None)
+
+    def pack_price(self, pack: PackOption) -> float:
+        """What one pack costs, rounded to the cent."""
+        return round_cents(pack.size * self.unit_cost * (1 - pack.discount))
 
     @model_validator(mode="after")
     def _window(self) -> IngredientConfig:

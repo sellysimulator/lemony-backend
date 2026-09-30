@@ -10,6 +10,7 @@ original values:
   formula its price denominator), ``weather_temperature_ranges`` and the
   per-ingredient perishing model (``fresh_days`` / ``max_days`` /
   ``never_perishes``) replacing ``ingredients_time_alive``.
+* ``packs`` replaces ``pack_sizes``: each pack size has its own discount.
 """
 
 from __future__ import annotations
@@ -23,6 +24,14 @@ INGREDIENT_NAMES: tuple[str, ...] = ("ice", "sugar", "lemons", "cups")
 RECIPE_INGREDIENTS: tuple[str, ...] = ("ice", "sugar", "lemons")
 
 MAX_NUM_DAYS = 30
+
+# Bigger packs are cheaper per unit (economies of scale); spoilage is the catch.
+_DEFAULT_PACKS: list[dict[str, Any]] = [
+    {"size": 50, "discount": 0.0},
+    {"size": 100, "discount": 0.05},
+    {"size": 200, "discount": 0.10},
+    {"size": 500, "discount": 0.20},
+]
 
 _DEFAULT_CONFIG: dict[str, Any] = {
     "num_days": 7,
@@ -87,28 +96,28 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "ingredients": {
         "ice": {
             "unit_cost": 0.05,
-            "pack_sizes": [50, 100, 200, 500],
+            "packs": _DEFAULT_PACKS,
             "fresh_days": 0,
             "max_days": 1,
             "never_perishes": False,
         },
         "sugar": {
             "unit_cost": 0.10,
-            "pack_sizes": [50, 100, 200, 500],
+            "packs": _DEFAULT_PACKS,
             "fresh_days": 5,
             "max_days": 10,
             "never_perishes": False,
         },
         "lemons": {
             "unit_cost": 0.15,
-            "pack_sizes": [50, 100, 200, 500],
+            "packs": _DEFAULT_PACKS,
             "fresh_days": 3,
             "max_days": 7,
             "never_perishes": False,
         },
         "cups": {
             "unit_cost": 0.05,
-            "pack_sizes": [50, 100, 200, 500],
+            "packs": _DEFAULT_PACKS,
             "fresh_days": 30,
             "max_days": 31,
             "never_perishes": True,
