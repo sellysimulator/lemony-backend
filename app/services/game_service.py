@@ -102,7 +102,7 @@ async def create_game(identity: str, config_data: Any, replace: bool = False) ->
             if unfinished:
                 await state_svc.delete_game(active_id)
         game = LemonadeGame(config, seed=random.SystemRandom().randrange(2**53))
-        document = {
+        document: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "game_id": uuid.uuid4().hex,
             "identity": identity,
@@ -150,7 +150,9 @@ async def require_owned(identity: str, game_id: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------- play
-async def submit_day(identity: str, data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], bool]:
+async def submit_day(
+    identity: str, data: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
     """Run the day. Returns (document, result, duplicate).
 
     Idempotent: re-submitting a day that has already been played returns the

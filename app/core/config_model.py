@@ -76,6 +76,30 @@ class MinMaxValues(_Strict):
         return self
 
 
+class Tolerance(_Strict):
+    """How far below / above a preference a customer still accepts, down to a score of 0."""
+
+    below: float = Field(ge=0, le=20)
+    above: float = Field(ge=0, le=20)
+
+
+class Tolerances(_Strict):
+    """Ingredients in units per cup; price as a share of the customer's budget."""
+
+    ice: Tolerance
+    sugar: Tolerance
+    lemons: Tolerance
+    price: Tolerance
+
+    @model_validator(mode="after")
+    def _price_shares(self) -> Tolerances:
+        if self.price.below > 1:
+            raise ValueError("price tolerance below must be a share of the budget, 0-1 (0-100%)")
+        if not 0 < self.price.above <= 5:
+            raise ValueError("price tolerance above must be above 0 and at most 5 (500%)")
+        return self
+
+
 class PersonPreferences(_Strict):
     spawn_per_hour: float = Field(ge=0, le=200)
     average_expense: float = Field(ge=0, le=100)
@@ -85,6 +109,7 @@ class PersonPreferences(_Strict):
     preferred_sugar: int
     preferred_lemons: int
     preferred_hour: int
+    tolerances: Tolerances
 
 
 MAX_PACK_DISCOUNT = 0.9
@@ -119,7 +144,11 @@ class IngredientConfig(_Strict):
         if isinstance(data, dict) and "pack_sizes" in data and "packs" not in data:
             sizes = data["pack_sizes"]
             data = {k: v for k, v in data.items() if k != "pack_sizes"}
-            data["packs"] = [{"size": size, "discount": 0.0} for size in sizes] if isinstance(sizes, list) else sizes
+            data["packs"] = (
+                [{"size": size, "discount": 0.0} for size in sizes]
+                if isinstance(sizes, list)
+                else sizes
+            )
         return data
 
     @field_validator("packs")
@@ -156,6 +185,9 @@ class GameConfig(_Strict):
     num_days: int = Field(ge=1, le=MAX_NUM_DAYS)
     starting_cash: float = Field(ge=0, le=1_000_000)
     min_max_values: MinMaxValues
+    # How much the recipe moves what customers will pay: a perfect cup raises it to
+    # budget x (1 + quality_swing), a cup they hate lowers it to budget x (1 - quality_swing).
+    quality_swing: float = Field(ge=0, le=1)
     people_preferences: dict[str, PersonPreferences]
     weather_multipliers: dict[str, float]
     weather_temperature_ranges: dict[str, FloatRange]

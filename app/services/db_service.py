@@ -184,7 +184,7 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
         by_hour.setdefault(h.day, []).append(
             {"hour": h.hour, "visitors": h.visitors, "buyers": h.buyers, "sold_out": h.sold_out}
         )
-    days = []
+    days: list[dict[str, Any]] = []
     for d in days_rows:
         perished = {name: getattr(d, f"perished_{name}") for name in INGREDIENT_NAMES}
         days.append(

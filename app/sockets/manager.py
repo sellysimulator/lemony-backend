@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from socketio import AsyncRedisManager, AsyncServer
+from socketio import AsyncRedisManager, AsyncServer  # type: ignore[import-untyped]
 
 from ..config import settings
 

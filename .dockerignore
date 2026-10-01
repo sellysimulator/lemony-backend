@@ -1,0 +1,16 @@
+# Keep secrets, local environments and build/test debris out of the image.
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+.git/
+.github/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/

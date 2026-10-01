@@ -1,0 +1,32 @@
+name: Backend CI
+
+# Render deploys a push to main only after every GitHub check on that commit
+# passes (`autoDeployTrigger: checksPass` in render.yaml), so this workflow IS
+# the deploy gate. It deliberately has no deploy job.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: ruff check app tests
+      - name: Format check (black)
+        run: black --check app tests
+      - name: Type check (mypy)
+        run: mypy app tests
+      - name: Tests with coverage (floor in pyproject.toml)
+        run: pytest -q --cov
+      - name: Build image
+        run: docker build -t lemony-backend:ci .

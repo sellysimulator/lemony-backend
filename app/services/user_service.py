@@ -15,7 +15,9 @@ def _clip(value: str | None, length: int) -> str | None:
 
 class UserService:
     def get_by_firebase_uid(self, db: Session, firebase_uid: str) -> User | None:
-        return db.execute(select(User).where(User.firebase_uid == firebase_uid)).scalar_one_or_none()
+        return db.execute(
+            select(User).where(User.firebase_uid == firebase_uid)
+        ).scalar_one_or_none()
 
     def upsert_user(
         self,

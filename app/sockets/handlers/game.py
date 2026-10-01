@@ -36,7 +36,9 @@ async def _error(sid: str, code: str, message: str) -> None:
 
 async def _send_state(sid: str, document: dict[str, Any]) -> None:
     seq = await gs.bump_seq(document)
-    await socket_manager.emit_to_sid(sid, "game_state", {"seq": seq, "state": gs.public_state(document)})
+    await socket_manager.emit_to_sid(
+        sid, "game_state", {"seq": seq, "state": gs.public_state(document)}
+    )
 
 
 async def _finish(sid: str, document: dict[str, Any]) -> None:
@@ -47,7 +49,9 @@ async def _finish(sid: str, document: dict[str, Any]) -> None:
     public_id = await gs.persist_if_finished(document)
     if public_id:
         seq = await gs.bump_seq(document)
-        await socket_manager.emit_to_sid(sid, "game_persisted", {"seq": seq, "public_id": public_id})
+        await socket_manager.emit_to_sid(
+            sid, "game_persisted", {"seq": seq, "public_id": public_id}
+        )
 
 
 def _payload(data: Any) -> dict[str, Any]:
@@ -62,7 +66,9 @@ async def create_game(sid: str, data: Any = None) -> None:
         return
     payload = _payload(data)
     try:
-        document = await gs.create_game(identity, payload.get("config"), bool(payload.get("replace")))
+        document = await gs.create_game(
+            identity, payload.get("config"), bool(payload.get("replace"))
+        )
     except gs.GameError as exc:
         await _error(sid, exc.code, exc.message)
         return

@@ -16,7 +16,7 @@ from typing import Any
 from ..config import settings
 from .state_backend import StateBackend, build_state_backend
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 LOCK_TIMEOUT_SECONDS = 10
 _GAME = "game:"
 _ACTIVE = "active:"

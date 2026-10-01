@@ -17,6 +17,8 @@ class LiveGame(Base):
     __tablename__ = "live_games"
 
     state_key: Mapped[str] = mapped_column(String(191), primary_key=True)
-    value: Mapped[str] = mapped_column(Text().with_variant(mysql.LONGTEXT(), "mysql"), nullable=False)
+    value: Mapped[str] = mapped_column(
+        Text().with_variant(mysql.LONGTEXT(), "mysql"), nullable=False
+    )
     # Naive UTC.
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True, index=True)

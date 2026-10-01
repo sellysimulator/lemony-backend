@@ -19,7 +19,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .config_model import GameConfig
 from .defaults import INGREDIENT_NAMES, PERSON_TYPES, RECIPE_INGREDIENTS
-from .demand import buy_probability, buy_scores, expected_spawn, poisson, refusal_reason
+from .demand import (
+    buy_probability,
+    expected_spawn,
+    ingredient_scores,
+    poisson,
+    recipe_quality,
+    refusal_reason,
+    willingness_to_pay,
+)
 from .ingredients import Ingredient
 from .money import round_cents
 from .people import PersonType, build_people
@@ -55,7 +63,8 @@ class LemonadeGame:
         self.phase: Phase = "planning"
         self.cash = _money(config.starting_cash)
         self.inventory: dict[str, Ingredient] = {
-            name: Ingredient.from_config(name, config.ingredients[name]) for name in INGREDIENT_NAMES
+            name: Ingredient.from_config(name, config.ingredients[name])
+            for name in INGREDIENT_NAMES
         }
         self.days: list[dict[str, Any]] = []
         self.last_day_events: list[dict[str, Any]] = []
@@ -100,7 +109,9 @@ class LemonadeGame:
                 cost += price * count
                 lots[name].append((size * count, price / size))
         for name_lots in lots.values():
-            name_lots.sort(key=lambda lot: -lot[1])  # same-day lots: dearest used first, cheapest kept longest
+            name_lots.sort(
+                key=lambda lot: -lot[1]
+            )  # same-day lots: dearest used first, cheapest kept longest
         return _money(cost), units, lots
 
     def list_cost_per_cup(self, recipe: dict[str, int]) -> float:
@@ -160,6 +171,18 @@ class LemonadeGame:
         by_type = {k: {"visitors": 0, "buyers": 0, "sold_out": 0} for k in PERSON_TYPES}
         by_hour: list[dict[str, Any]] = []
         reasons: dict[str, int] = {}
+        # The recipe and price are fixed for the day, so each type's view of them is too.
+        scores_by_type = {p.kind: ingredient_scores(p, recipe) for p in self.people}
+        probability_by_type = {
+            p.kind: buy_probability(
+                p,
+                price,
+                willingness_to_pay(
+                    p, recipe_quality(scores_by_type[p.kind]), self.config.quality_swing
+                ),
+            )
+            for p in self.people
+        }
         revenue = 0.0
         ingredients_used = 0.0
 
@@ -172,8 +195,7 @@ class LemonadeGame:
             hour_stats = {"hour": hour, "visitors": len(arrivals), "buyers": 0, "sold_out": 0}
             n = len(arrivals)
             for i, person in enumerate(arrivals):
-                scores = buy_scores(person, price, recipe)
-                probability = buy_probability(scores)
+                probability = probability_by_type[person.kind]
                 wants = rng.random() < probability
                 reason = None
                 if wants and self._can_make_cup(recipe):
@@ -188,7 +210,7 @@ class LemonadeGame:
                     hour_stats["sold_out"] += 1
                 else:
                     outcome = "refused"
-                    reason = refusal_reason(person, price, recipe, scores)
+                    reason = refusal_reason(person, price, recipe, scores_by_type[person.kind])
                     reasons[reason] = reasons.get(reason, 0) + 1
                 by_type[person.kind]["visitors"] += 1
                 events.append(
@@ -205,7 +227,9 @@ class LemonadeGame:
 
         revenue = _money(revenue)
         perish_rng = self._rng(self.day, "perish")
-        losses = {name: self.inventory[name].end_of_day_perish(perish_rng) for name in INGREDIENT_NAMES}
+        losses = {
+            name: self.inventory[name].end_of_day_perish(perish_rng) for name in INGREDIENT_NAMES
+        }
         perished = {name: lost for name, (lost, _) in losses.items()}
         perished_value = _money(sum(value for _, value in losses.values()))
         self.cash = _money(self.cash + revenue)
@@ -219,7 +243,9 @@ class LemonadeGame:
             "price": price,
             "recipe": recipe,
             # What the cups sold actually cost (discounts included); list price if none sold.
-            "cost_per_cup": _money(ingredients_used / buyers) if buyers else self.list_cost_per_cup(recipe),
+            "cost_per_cup": (
+                _money(ingredients_used / buyers) if buyers else self.list_cost_per_cup(recipe)
+            ),
             "purchased": units,
             "spend": spend,
             "revenue": revenue,
@@ -253,7 +279,9 @@ class LemonadeGame:
 
     # --------------------------------------------------------------- views
     def summary(self) -> dict[str, Any]:
-        perished_totals = {name: sum(d["perished"][name] for d in self.days) for name in INGREDIENT_NAMES}
+        perished_totals = {
+            name: sum(d["perished"][name] for d in self.days) for name in INGREDIENT_NAMES
+        }
         return {
             "num_days": self.config.num_days,
             "days_played": len(self.days),

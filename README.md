@@ -12,11 +12,14 @@ cp .env.example .env            # fill DB_* (and FIREBASE_SERVICE_ACCOUNT_JSON f
 ./venv/bin/uvicorn app.main:application --reload --port 8080
 ```
 
-Tests run on SQLite and never read `.env`:
+Tests run on SQLite and never read `.env`. CI (`.github/workflows/ci.yml`) runs exactly
+these, then builds the Docker image; Render deploys only after it passes:
 
 ```bash
-./venv/bin/pytest -q --cov
 ./venv/bin/ruff check app tests
+./venv/bin/black --check app tests
+./venv/bin/mypy app tests
+./venv/bin/pytest -q --cov
 ```
 
 ## Layout
@@ -46,7 +49,12 @@ Tests run on SQLite and never read `.env`:
 ## Game rules
 
 - **Spawn.** Each hour, the number of arrivals of each person type is `Poisson(base × (1 + mean(weather_match, hour_kernel, temp_kernel)) × weather_multiplier)`.
-- **Buying.** The chance a customer buys is `mean(price, ice, sugar, lemons)` triangle-kernel scores. The price score is symmetric, so a cup that is too cheap is penalised as well.
+- **Buying.** The recipe sets what a customer is willing to pay, and the price is compared against it.
+  - Each ingredient scores 1 at the person type's favourite amount and falls linearly to 0 at its own `tolerances.<ingredient>.below` units under it or `.above` units over it. The configured ranges only limit the recipe sliders; they do not change pickiness.
+  - `quality = mean(ice, sugar, lemons scores)` and `wtp = budget × (1 + quality_swing × (2 × quality − 1))`, where `budget` is `average_expense`.
+  - `P(buy) = 1 / (1 + exp((price − wtp) / spread))` with `spread = tolerances.price.above × budget / ln 19`: half of the type buys at `wtp`, 5 % at `wtp + above × budget`.
+  - Under `budget × (1 − tolerances.price.below)` a cup looks suspicious and `P(buy)` is scaled by `price ÷ that floor`.
+  - A refusal reads `too_cheap` under that floor. Otherwise it reads `too_pricey` when the price sits further over the budget (in units of `above × budget`) than the worst ingredient sits under a perfect score, or else names that ingredient.
 - **Packs.** Each ingredient is sold in packs, and each pack size has its own discount: `pack price = size × unit_cost × (1 − discount)`, rounded to the cent. Every batch remembers the unit price paid, so the day's `cost_per_cup` (ingredients used ÷ cups sold) and `perished_value` reflect discounts.
 - **Money rounding.** Every money value rounds to whole cents, halves away from zero, after trimming float noise (`app/core/money.py`). The frontend's `src/utils/money.ts` uses the same rule, and both test suites run the same cases in `tests/fixtures/rounding_cases.json` (copied in the frontend repo).
 - **Perishing.** Each purchase batch has a fresh period followed by a linear ramp: `hazard(age) = 0` while `age ≤ fresh_days`, `1` once `age ≥ max_days`, and `(age − fresh)/(max − fresh)` in between. Units are lost binomially at the end of each day.

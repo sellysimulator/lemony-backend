@@ -8,7 +8,7 @@ path: two of them drift, and the one that drifts is the one that fails open.
 import logging
 
 from fastapi import Header, HTTPException, status
-from firebase_admin import auth as firebase_auth
+from firebase_admin import auth as firebase_auth  # type: ignore[import-untyped]
 
 from ..core.firebase import init_firebase
 
@@ -83,9 +83,7 @@ def get_current_firebase_user(authorization: str = Header(default="")) -> dict:
     caller, so a deployment error does not look like a user's expired session.
     """
     if not _bearer_token(authorization):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=_MISSING_TOKEN_DETAIL
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_MISSING_TOKEN_DETAIL)
 
     claims = _verified_claims(authorization)
     if claims is None:
@@ -94,9 +92,7 @@ def get_current_firebase_user(authorization: str = Header(default="")) -> dict:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=_UNCONFIGURED_DETAIL,
             )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=_INVALID_TOKEN_DETAIL
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_INVALID_TOKEN_DETAIL)
     return claims
 
 

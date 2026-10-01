@@ -25,7 +25,9 @@ def roll_day_weather(config: GameConfig, rng: random.Random) -> tuple[str, float
         matches = [
             min(
                 WEATHER_TYPES,
-                key=lambda w: min(abs(ranges[w].min - temperature), abs(ranges[w].max - temperature)),
+                key=lambda w: min(
+                    abs(ranges[w].min - temperature), abs(ranges[w].max - temperature)
+                ),
             )
         ]
     return rng.choice(matches), temperature

@@ -9,9 +9,19 @@ Spawn, per hour and person type (the user's "base + preference bonus"):
     expected  = spawn_per_hour * (1 + bonus) * weather_multiplier[weather]
     count     ~ Poisson(expected)
 
-Buy (the user's formula, unchanged): the mean of four triangle-kernel scores —
-price vs average expense (symmetric on purpose: a suspiciously cheap cup is
-penalised too), and ice / sugar / lemons vs preference — is the probability.
+Buy — the recipe sets what a customer is willing to pay, the price is compared
+against it:
+
+    score_i  = 1 at the favourite amount of ingredient i, falling linearly to 0
+               at tolerance.below units under it / tolerance.above units over it
+    quality  = mean(score_ice, score_sugar, score_lemons)
+    wtp      = budget * (1 + quality_swing * (2 * quality - 1))
+    spread   = tolerance.price.above * budget / ln(19)
+    P(buy)   = 1 / (1 + exp((price - wtp) / spread))
+
+So half of a type buys at exactly ``wtp``, 95 % at ``wtp - above * budget`` and
+5 % at ``wtp + above * budget``. A price under ``budget * (1 - tolerance.price.below)``
+looks suspicious: P(buy) is scaled by ``price / that floor``.
 """
 
 from __future__ import annotations
@@ -60,25 +70,62 @@ def poisson(rng: random.Random, lam: float) -> int:
         k += 1
 
 
-def buy_scores(person: PersonType, price: float, recipe: dict[str, int]) -> dict[str, float]:
-    d = person.denominators
+def asymmetric_kernel(current: float, preferred: float, below: float, above: float) -> float:
+    """Like ``triangle_kernel`` with a separate reach under and over the preference."""
+    return triangle_kernel(current, preferred, below if current < preferred else above)
+
+
+def ingredient_scores(person: PersonType, recipe: dict[str, int]) -> dict[str, float]:
+    t = person.tolerances
     return {
-        "price": triangle_kernel(price, person.average_expense, d.price),
-        "ice": triangle_kernel(recipe["ice"], person.preferred_ice, d.ice),
-        "sugar": triangle_kernel(recipe["sugar"], person.preferred_sugar, d.sugar),
-        "lemons": triangle_kernel(recipe["lemons"], person.preferred_lemons, d.lemons),
+        "ice": asymmetric_kernel(recipe["ice"], person.preferred_ice, *t.ice),
+        "sugar": asymmetric_kernel(recipe["sugar"], person.preferred_sugar, *t.sugar),
+        "lemons": asymmetric_kernel(recipe["lemons"], person.preferred_lemons, *t.lemons),
     }
 
 
-def buy_probability(scores: dict[str, float]) -> float:
+def recipe_quality(scores: dict[str, float]) -> float:
     return statistics.mean(scores.values())
 
 
-def refusal_reason(person: PersonType, price: float, recipe: dict[str, int], scores: dict[str, float]) -> str:
-    """The lowest-scoring factor, phrased for the player."""
+def willingness_to_pay(person: PersonType, quality: float, quality_swing: float) -> float:
+    return person.average_expense * (1 + quality_swing * (2 * quality - 1))
+
+
+def cheap_floor(person: PersonType) -> float:
+    """Below this price the cup looks suspicious."""
+    return person.average_expense * (1 - person.tolerances.price[0])
+
+
+def buy_probability(person: PersonType, price: float, wtp: float) -> float:
+    spread = person.tolerances.price[1] * person.average_expense / math.log(19)
+    if spread <= 0:
+        probability = 1.0 if price <= wtp else 0.0
+    else:
+        z = max(-60.0, min(60.0, (price - wtp) / spread))
+        probability = 1 / (1 + math.exp(z))
+    floor = cheap_floor(person)
+    if price < floor:
+        probability *= price / floor
+    return probability
+
+
+def refusal_reason(
+    person: PersonType, price: float, recipe: dict[str, int], scores: dict[str, float]
+) -> str:
+    """Why a customer said no, phrased for the player.
+
+    Under the suspicious floor it is the price. Otherwise the price is blamed when
+    it sits further over the budget (in units of the price tolerance) than the
+    worst ingredient sits under a perfect score; else that ingredient is.
+    """
+    if price < cheap_floor(person):
+        return "too_cheap"
     factor = min(scores, key=lambda key: scores[key])
-    if factor == "price":
-        return "too_cheap" if price < person.average_expense else "too_pricey"
+    budget, above = person.average_expense, person.tolerances.price[1]
+    price_pressure = (price - budget) / (above * budget) if budget > 0 else 1.0
+    if scores[factor] >= 1 or price_pressure >= 1 - scores[factor]:
+        return "too_pricey"
     preferred = getattr(person, f"preferred_{factor}")
     too_much = recipe[factor] > preferred
     return {

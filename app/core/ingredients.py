@@ -113,7 +113,11 @@ class Ingredient:
         return sum(b.qty * self.hazard(b.age + 1) for b in self.batches)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"batches": [{"qty": b.qty, "age": b.age, "unit_cost": self.paid(b)} for b in self.batches]}
+        return {
+            "batches": [
+                {"qty": b.qty, "age": b.age, "unit_cost": self.paid(b)} for b in self.batches
+            ]
+        }
 
     def view(self) -> dict[str, Any]:
         """Client-facing inventory line."""

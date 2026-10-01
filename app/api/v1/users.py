@@ -38,7 +38,9 @@ def _or_claim(value: str | None, claims: dict, key: str) -> str | None:
 def _internal_error(what: str) -> HTTPException:
     # The driver's own message names host, port and user: log it, never return it.
     logger.exception(what)
-    return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=_INTERNAL_ERROR_DETAIL)
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=_INTERNAL_ERROR_DETAIL
+    )
 
 
 @router.post("/upsert", response_model=UserResponse)
@@ -80,7 +82,8 @@ def get_my_stats(
     stats = db.get(UserStats, user.id) if user else None
     if stats is None:
         return UserStatsResponse()
-    best_public = db.get(Game, stats.best_game_id).public_id if stats.best_game_id else None
+    best = db.get(Game, stats.best_game_id) if stats.best_game_id else None
+    best_public = best.public_id if best else None
     return UserStatsResponse(
         games_played=stats.games_played,
         days_played=stats.days_played,

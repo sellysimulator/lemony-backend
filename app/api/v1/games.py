@@ -29,7 +29,9 @@ def claim_guest_games(
 ) -> ClaimResponse:
     """Reattribute the finished games of a guest id the caller holds (from its localStorage)."""
     if not GUEST_ID_RE.match(payload.guest_identity):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid guest id.")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid guest id."
+        )
     try:
         user = _users.ensure_user(db, claims["uid"])
         result = db.execute(
@@ -44,4 +46,4 @@ def claim_guest_games(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error."
         ) from None
-    return ClaimResponse(claimed=int(result.rowcount or 0))
+    return ClaimResponse(claimed=int(result.rowcount or 0))  # type: ignore[attr-defined]

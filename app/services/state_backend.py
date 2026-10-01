@@ -110,14 +110,14 @@ class SqlStateBackend:
         with self._session() as db:
             result = db.execute(delete(LiveGame).where(LiveGame.state_key.in_(keys)))
             db.commit()
-            return int(result.rowcount or 0)
+            return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
     def purge_expired_sync(self) -> int:
         """Drop every expired row. Returns how many went."""
         with self._session() as db:
             result = db.execute(delete(LiveGame).where(LiveGame.expires_at <= _utcnow()))
             db.commit()
-            return int(result.rowcount or 0)
+            return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
     def keys_sync(self) -> list[str]:
         with self._session() as db:
@@ -161,4 +161,4 @@ def build_state_backend(enabled: bool, url: str) -> StateBackend:
         )
     import redis.asyncio as aioredis
 
-    return aioredis.from_url(url)  # type: ignore[no-any-return]
+    return aioredis.from_url(url)  # type: ignore[return-value]

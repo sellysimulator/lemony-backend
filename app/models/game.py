@@ -90,9 +90,7 @@ class GameDay(Base):
 
 class GameDayType(Base):
     __tablename__ = "game_day_types"
-    __table_args__ = (
-        UniqueConstraint("game_id", "day", "person_type", name="uq_game_day_types"),
-    )
+    __table_args__ = (UniqueConstraint("game_id", "day", "person_type", name="uq_game_day_types"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)

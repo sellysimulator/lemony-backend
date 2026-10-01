@@ -41,7 +41,8 @@ async def test_sql_backend_roundtrip_and_expiry():
     await backend.setex("k", 60, "v2")
     assert await backend.get("k") == "v2" and await backend.exists("k") == 1
     with SessionLocal() as db:
-        db.get(LiveGame, "k").expires_at = datetime(2000, 1, 1)  # noqa: DTZ001 — column is naive UTC
+        expired = datetime(2000, 1, 1)  # noqa: DTZ001 — column is naive UTC
+        db.get(LiveGame, "k").expires_at = expired
         db.commit()
     assert await backend.get("k") is None
     await backend.setex("a", 60, "x")
@@ -50,7 +51,9 @@ async def test_sql_backend_roundtrip_and_expiry():
 
 @pytest.mark.asyncio
 async def test_schema_guard_discards_stale_document():
-    await state_service.redis_client.setex("game:old", 60, '{"schema_version": 0, "game_id": "old"}')
+    await state_service.redis_client.setex(
+        "game:old", 60, '{"schema_version": 0, "game_id": "old"}'
+    )
     assert await state_service.state_svc.get_game("old") is None
     assert await state_service.redis_client.get("game:old") is None
 
@@ -107,7 +110,9 @@ async def test_refresh_resumes_same_game_and_other_identity_cannot(emits):
 
     # page refresh: new sid, same guest id, resume by stored id + token
     await connect("s2", {"guestId": guest})
-    await game.resume_game("s2", {"game_id": created["game_id"], "session_token": created["session_token"]})
+    await game.resume_game(
+        "s2", {"game_id": created["game_id"], "session_token": created["session_token"]}
+    )
     assert emits.of("game_state")[-1]["state"]["game_id"] == created["game_id"]
 
     # resume with nothing stored finds the active game by identity
@@ -116,7 +121,9 @@ async def test_refresh_resumes_same_game_and_other_identity_cannot(emits):
 
     # a different identity holding the id and token gets nothing
     await connect("s3", {"guestId": new_guest()})
-    await game.resume_game("s3", {"game_id": created["game_id"], "session_token": created["session_token"]})
+    await game.resume_game(
+        "s3", {"game_id": created["game_id"], "session_token": created["session_token"]}
+    )
     assert emits.of("no_active_game")
     await game.submit_day("s3", {"game_id": created["game_id"], "day": 1, **PLAN})
     assert emits.of("error")[-1]["code"] == "NO_GAME"
@@ -167,23 +174,36 @@ async def test_signed_in_game_reaches_profile_and_guest_claim(emits, firebase_to
 
     client = TestClient(app)
     auth = {"Authorization": "Bearer tok"}
-    assert client.post("/api/v1/users/upsert", json={}, headers=auth).json()["display_name"] == "Lemon Lover"
+    assert (
+        client.post("/api/v1/users/upsert", json={}, headers=auth).json()["display_name"]
+        == "Lemon Lover"
+    )
     assert client.get("/api/v1/users/me/games", headers=auth).json()["total"] == 1
-    assert client.post("/api/v1/games/claim", json={"guest_identity": guest}, headers=auth).json()["claimed"] == 1
+    assert (
+        client.post("/api/v1/games/claim", json={"guest_identity": guest}, headers=auth).json()[
+            "claimed"
+        ]
+        == 1
+    )
     listing = client.get("/api/v1/users/me/games", headers=auth).json()
     assert listing["total"] == 2
     stats = client.get("/api/v1/users/me/stats", headers=auth).json()
     assert stats["games_played"] == 2
     detail = client.get(f"/api/v1/users/me/games/{gid}", headers=auth).json()
     assert detail["days"][0]["by_hour"] and detail["config"]["num_days"] == 1
-    assert client.get("/api/v1/users/me/games", headers={"Authorization": "Bearer nope"}).status_code in (401, 503)
+    assert client.get(
+        "/api/v1/users/me/games", headers={"Authorization": "Bearer nope"}
+    ).status_code in (401, 503)
 
 
 def test_config_routes():
     client = TestClient(app)
     defaults = client.get("/api/v1/config/defaults").json()
     assert defaults["person_types"] == ["Child", "Teenager", "Adult", "Senior"]
-    assert client.post("/api/v1/config/validate", json=defaults["config"]).json() == {"valid": True, "message": None}
+    assert client.post("/api/v1/config/validate", json=defaults["config"]).json() == {
+        "valid": True,
+        "message": None,
+    }
     defaults["config"]["weather_temperature_ranges"]["rainy"]["min"] = 8
     res = client.post("/api/v1/config/validate", json=defaults["config"]).json()
     assert not res["valid"] and "gap" in res["message"]

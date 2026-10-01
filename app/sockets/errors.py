@@ -22,24 +22,23 @@ logger = logging.getLogger(__name__)
 Handler = Callable[..., Awaitable[Any]]
 
 #: Deliberately vague. The player can act on "try again"; they can do nothing
-#: with a driver message, and `15 §3.7` already forbids putting one on the
-#: wire — a connection string in an alert box is the same leak by another
-#: route.
+#: with a driver message, and a driver message must never go on the wire — a
+#: connection string in an alert box is a credential leak.
 SERVER_ERROR_MESSAGE = "Something went wrong on the server. Please try again."
 
 
 def guarded(event: str = "error") -> Callable[[Handler], Handler]:
     """Report an unhandled handler exception to the caller, then continue.
 
-    `event` is `"error"` for the play loop, whose payload carries a `code`
-    (`12 §2`), and `"join_error"` for the lobby, whose payload is `{message}`
-    only (`11 §2`). Both frozen shapes are respected.
+    `event` is `"error"` (payload `{code, message}`), which every Lemony
+    handler uses. Any other event name gets `{message}` only — a template
+    leftover for lobby-style `join_error` events; Lemony has no lobby.
 
     Apply it *under* `@sio.event`, so Socket.IO registers the wrapper:
 
         @sio.event
         @guarded()
-        async def submit_order(sid, data=None): ...
+        async def submit_day(sid, data=None): ...
     """
 
     def decorate(fn: Handler) -> Handler:
@@ -48,8 +47,7 @@ def guarded(event: str = "error") -> Callable[[Handler], Handler]:
             try:
                 return await fn(sid, *args, **kwargs)
             except Exception:
-                # The event name, never the payload: a payload may carry a
-                # `host_secret` or a `session_token` (`00-conventions.md §2`).
+                # The event name, never the payload: it may carry a `session_token`.
                 logger.exception("Handler %r failed for sid %s.", fn.__name__, sid)
                 payload: dict[str, str] = {"message": SERVER_ERROR_MESSAGE}
                 if event == "error":

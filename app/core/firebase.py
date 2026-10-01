@@ -47,9 +47,7 @@ def init_firebase() -> firebase_admin.App | None:
             # rather than raising on a duplicate `initialize_app`.
             _app = firebase_admin.get_app()
             return _app
-        certificate = credentials.Certificate(
-            json.loads(settings.FIREBASE_SERVICE_ACCOUNT_JSON)
-        )
+        certificate = credentials.Certificate(json.loads(settings.FIREBASE_SERVICE_ACCOUNT_JSON))
         _app = firebase_admin.initialize_app(certificate)
     except Exception as exc:  # noqa: BLE001 — unconfigured must never raise
         if not _credential_failure_logged:

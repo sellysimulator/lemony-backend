@@ -53,9 +53,6 @@ else from the template needs the user's explicit OK.
 - **`../Lemony_Frontend/src/components/config/docs/entries.tsx`** — player-facing
   explanation of every config knob; useful for the "why" behind a rule.
 
-Some docstrings cite `00-decisions.md D19`, `15 §3.7`, `12 §2`. Those are Beery-era plan
-docs that do not exist here — dangling references, not missing files to go find.
-
 ## Architecture in one pass
 
 - **`app/core/` engine modules are pure** (`engine`, `demand`, `people`, `weather`,
@@ -80,15 +77,19 @@ docs that do not exist here — dangling references, not missing files to go fin
 python3.11 -m venv venv && ./venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 cp .env.example .env
 ./venv/bin/uvicorn app.main:application --reload --port 8080   # `application`, NOT `app`
+./venv/bin/ruff check app tests
+./venv/bin/black --check app tests  # line length 100, matches ruff (pyproject)
+./venv/bin/mypy app tests           # default strictness
 ./venv/bin/pytest -q --cov          # coverage floor 75 (pyproject)
-./venv/bin/ruff check app tests     # clean — keep it clean
 ./venv/bin/alembic upgrade head
 ./venv/bin/alembic revision --autogenerate -m "..."
 ```
 
-`app.main:app` is REST-only; the Socket.IO ASGI wrapper is `application`. `mypy` and
-`black` are installed but **not clean and not gated** — don't mass-reformat or "fix" mypy
-as a side effect of an unrelated change; do it as its own change if asked.
+`app.main:app` is REST-only; the Socket.IO ASGI wrapper is `application`. The four
+checks above are exactly what CI runs (then `docker build`); all must stay green.
+`# type: ignore`s are targeted: `import-untyped` on `socketio`/`firebase_admin` (no
+stubs), `attr-defined` on DML `rowcount` (SQLAlchemy types `execute()` as `Result`), and
+`return-value` on the Redis client posing as `StateBackend`.
 
 ## Contracts that span both repos
 
@@ -172,8 +173,7 @@ diverge (skips if the frontend isn't a sibling checkout).
 (`/health/deep` for DB/Redis readiness, always HTTP 200), `preDeployCommand: alembic upgrade
 head`, `REDIS_ENABLED=false`, CORS `https://lemonysim.web.app` + localhost.
 
-Known gaps — verify before relying on them:
-- **No CI.** There is no `.github/workflows`; `render.yaml` comments mention a `ci.yml` that
-  doesn't exist, so `autoDeployTrigger: checksPass` gates nothing. Run tests + ruff yourself.
-- **No `.dockerignore`**, and the Dockerfile does `COPY . .` — `venv/` and `.env` would be
-  copied into a locally built image.
+`autoDeployTrigger: checksPass` makes `.github/workflows/ci.yml` the deploy gate: a push
+to `main` deploys only once CI passes. Don't add a deploy job or deploy hook to CI (it
+would deploy twice). `.dockerignore` keeps `.env`, `venv/` and `tests/` out of the image
+— keep it in step with anything new that must not ship.
