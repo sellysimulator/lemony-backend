@@ -47,7 +47,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "people_preferences": {
         "Child": {
             "spawn_per_hour": 5,
-            "average_expense": 0.20,
+            "average_expense": 0.30,
             "preferred_degrees": 30,
             "preferred_weather": "sunny",
             "preferred_ice": 3,
@@ -57,7 +57,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
         },
         "Teenager": {
             "spawn_per_hour": 3,
-            "average_expense": 0.30,
+            "average_expense": 0.40,
             "preferred_degrees": 25,
             "preferred_weather": "cloudy",
             "preferred_ice": 2,
@@ -102,21 +102,21 @@ _DEFAULT_CONFIG: dict[str, Any] = {
             "never_perishes": False,
         },
         "sugar": {
-            "unit_cost": 0.10,
+            "unit_cost": 0.05,
             "packs": _DEFAULT_PACKS,
             "fresh_days": 5,
             "max_days": 10,
             "never_perishes": False,
         },
         "lemons": {
-            "unit_cost": 0.15,
+            "unit_cost": 0.10,
             "packs": _DEFAULT_PACKS,
             "fresh_days": 3,
             "max_days": 7,
             "never_perishes": False,
         },
         "cups": {
-            "unit_cost": 0.05,
+            "unit_cost": 0.08,
             "packs": _DEFAULT_PACKS,
             "fresh_days": 30,
             "max_days": 31,
