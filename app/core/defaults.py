@@ -42,7 +42,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
         "lemons": {"min": 0, "max": 5},
         "temperature": {"min": 0, "max": 40},
         "hour": {"min": 9, "max": 17},
-        "price": {"min": 0.0, "max": 3.0},
+        "price": {"min": 0.0, "max": 1.5},
     },
     "people_preferences": {
         "Child": {
