@@ -1,10 +1,34 @@
 """Application settings, loaded from environment variables and `.env`."""
 
+import ssl
 from typing import Any
 from urllib.parse import quote
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _db_ssl_context(ca: str) -> ssl.SSLContext:
+    """TLS context for PyMySQL, verifying the server against ``ca`` if given.
+
+    ``ca`` is PEM text -- with real newlines, or ``\\n``-escaped so it fits on
+    one ``.env`` line -- or a path to a PEM file. A value that is neither
+    raises instead of falling back to an unverified connection.
+    """
+    ca = ca.strip()
+    if not ca:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    try:
+        if ca.startswith("-----BEGIN"):
+            return ssl.create_default_context(cadata=ca.replace("\\n", "\n"))
+        return ssl.create_default_context(cafile=ca)
+    except OSError as exc:  # ssl.SSLError is an OSError too
+        raise ValueError(
+            "DB_SSL_CA is neither a valid PEM certificate nor a readable PEM file"
+        ) from exc
 
 
 class Settings(BaseSettings):
@@ -23,7 +47,12 @@ class Settings(BaseSettings):
     DB_USER: str = "root"
     DB_PASSWORD: str = ""
     DB_DATABASE: str = "lemony"
-    DB_REQUIRE_SSL: bool = False
+    # TLS to MySQL is required unless switched off (local MySQL without TLS).
+    # DB_SSL_CA is this project's MySQL CA certificate -- the PEM text itself,
+    # or a path to a PEM file -- and adds certificate and hostname
+    # verification; without it the link is encrypted but the server is not
+    # authenticated.
+    DB_REQUIRE_SSL: bool = True
     DB_SSL_CA: str = ""
     # Full SQLAlchemy URL that replaces the DB_* assembly. Used by the test
     # suite (SQLite); leave empty in every real deployment.
@@ -68,16 +97,19 @@ class Settings(BaseSettings):
         return self.db_url.startswith("sqlite")
 
     @property
-    def db_connect_args(self) -> dict:
-        """Driver connect args; TLS only when explicitly required."""
+    def db_connect_args(self) -> dict[str, Any]:
+        """Driver connect args; TLS unless ``DB_REQUIRE_SSL`` is false.
+
+        TLS is passed as an ``SSLContext`` because that is what puts PyMySQL in
+        REQUIRED mode. An empty ``ssl`` dict is falsy, so PyMySQL treats it as
+        no TLS options at all and silently downgrades to plaintext when the
+        server does not offer TLS.
+        """
         if self.is_sqlite:
             return {"check_same_thread": False}
         if not self.DB_REQUIRE_SSL:
             return {}
-        ssl_opts: dict[str, Any] = {}
-        if self.DB_SSL_CA:
-            ssl_opts["ca"] = self.DB_SSL_CA
-        return {"ssl": ssl_opts}
+        return {"ssl": _db_ssl_context(self.DB_SSL_CA)}
 
 
 settings = Settings()
