@@ -44,6 +44,7 @@ class GameListItem(BaseModel):
     total_visitors: int
     total_buyers: int
     total_sold_out: int
+    final_popularity: float | None = None
     started_at: str
     finished_at: str
 

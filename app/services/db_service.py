@@ -33,6 +33,10 @@ def _money(value: float) -> Decimal:
     return Decimal(str(round_cents(float(value))))
 
 
+def _share(value: float | None) -> Decimal | None:
+    return Decimal(str(round(float(value), 4))) if value is not None else None
+
+
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value).replace(tzinfo=None)
 
@@ -70,6 +74,7 @@ def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any])
         total_visitors=summary["total_visitors"],
         total_buyers=summary["total_buyers"],
         total_sold_out=summary["total_sold_out"],
+        final_popularity=_share(summary.get("final_popularity")),
         started_at=_dt(document["started_at"]),
         finished_at=_dt(document["finished_at"]),
     )
@@ -99,6 +104,7 @@ def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any])
                 buyers=d["buyers"],
                 sold_out=d["sold_out"],
                 refused=d["refused"],
+                popularity=_share(d.get("popularity")),
                 perished_ice=d["perished"]["ice"],
                 perished_sugar=d["perished"]["sugar"],
                 perished_lemons=d["perished"]["lemons"],
@@ -158,6 +164,7 @@ def game_row_summary(game: Game) -> dict[str, Any]:
         "total_visitors": game.total_visitors,
         "total_buyers": game.total_buyers,
         "total_sold_out": game.total_sold_out,
+        "final_popularity": _f(game.final_popularity),
         "started_at": game.started_at.isoformat(),
         "finished_at": game.finished_at.isoformat(),
     }
@@ -204,6 +211,7 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
                 "sold_out": d.sold_out,
                 "refused": d.refused,
                 "conversion": round(d.buyers / d.visitors, 4) if d.visitors else 0.0,
+                "popularity": _f(d.popularity),
                 "perished": perished,
                 "perished_value": float(d.perished_value),
                 "cash_end": float(d.cash_end),

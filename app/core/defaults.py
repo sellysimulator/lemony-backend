@@ -14,6 +14,8 @@ original values:
   willingness-to-pay buy model (see ``demand.py``). Preferred amounts and
   unit costs are set so each type's favourite cup costs well under its budget.
 * ``packs`` replaces ``pack_sizes``: each pack size has its own discount.
+* New: ``starting_popularity`` for the popularity factor on the buy chance
+  (see ``demand.py``). 0.5 is neutral, so day 1 plays as it did before.
 """
 
 from __future__ import annotations
@@ -48,6 +50,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
         "price": {"min": 0.2, "max": 1.0},
     },
     "quality_swing": 0.4,
+    "starting_popularity": 0.5,
     "people_preferences": {
         "Child": {
             "spawn_per_hour": 5,

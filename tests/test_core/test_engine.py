@@ -6,11 +6,13 @@ from pydantic import ValidationError
 from app.core.config_model import GameConfig
 from app.core.defaults import default_config
 from app.core.demand import (
+    apply_popularity,
     asymmetric_kernel,
     buy_probability,
     expected_spawn,
     ingredient_scores,
     poisson,
+    popularity,
     recipe_quality,
     refusal_reason,
     triangle_kernel,
@@ -88,6 +90,15 @@ def test_type_names_locked():
     data["people_preferences"]["Toddler"] = data["people_preferences"].pop("Child")
     with pytest.raises(ValidationError, match="exactly these keys"):
         GameConfig.model_validate(data)
+
+
+def test_starting_popularity_defaults_and_bounds():
+    data = default_config()
+    del data["starting_popularity"]  # configs saved before popularity still load
+    assert GameConfig.model_validate(data).starting_popularity == 0.5
+    for bad in (-0.1, 1.1):
+        with pytest.raises(ValidationError):
+            cfg(starting_popularity=bad)
 
 
 def test_num_days_bounds():
@@ -243,6 +254,18 @@ def test_buy_probability_is_half_at_wtp_and_falls_with_price():
     assert buy_probability(adult, wtp - reach, wtp) == pytest.approx(0.95)
 
 
+def test_popularity_is_the_mean_daily_rate_or_the_start():
+    assert popularity([], 0.3) == 0.3
+    assert popularity([0.5, 1.0, 0.0], 0.3) == pytest.approx(0.5)
+
+
+def test_popularity_scales_the_chance_around_a_neutral_half():
+    assert apply_popularity(0.4, 0.5) == pytest.approx(0.4)
+    assert apply_popularity(0.4, 0.0) == pytest.approx(0.2)
+    assert apply_popularity(0.4, 1.0) == pytest.approx(0.6)
+    assert apply_popularity(0.9, 1.0) == 1.0
+
+
 def test_too_cheap_is_penalised_and_named():
     child = people_by_kind()["Child"]  # budget 0.30, looks suspicious under 0.15
     favourite = {"ice": 2, "sugar": 2, "lemons": 1}
@@ -349,3 +372,32 @@ def test_day_lifecycle_and_finish():
     assert game.phase == "finished"
     s = game.summary()
     assert s["days_played"] == 2 and s["total_profit"] == pytest.approx(game.cash - 100)
+
+
+def test_popularity_carries_over_from_the_days_with_visitors():
+    game = LemonadeGame(cfg(num_days=3, starting_popularity=0.2), seed=7)
+    assert game.view()["popularity"] == 0.2
+    day1 = game.run_day(plan())
+    assert day1["record"]["popularity"] == 0.2
+    rate = day1["record"]["buyers"] / day1["record"]["visitors"]
+    assert game.view()["popularity"] == round(rate, 4)
+
+    game.acknowledge_day(1)
+    day2 = game.run_day(plan(purchases={}))
+    assert day2["record"]["popularity"] == round(rate, 4)
+    by_kind = {p.kind: p for p in game.people}
+    recipe, price = day2["record"]["recipe"], day2["record"]["price"]
+    for event in day2["events"]:
+        person = by_kind[event["type"]]
+        quality = recipe_quality(ingredient_scores(person, recipe))
+        base = buy_probability(person, price, willingness_to_pay(person, quality, 0.4))
+        assert event["probability"] == round(apply_popularity(base, rate), 3)
+
+    # A day with no visitors is no evidence: it leaves popularity alone.
+    game.days.append({**day2["record"], "visitors": 0, "buyers": 0})
+    rate2 = day2["record"]["buyers"] / day2["record"]["visitors"]
+    assert game.current_popularity() == pytest.approx((rate + rate2) / 2)
+    assert game.summary()["final_popularity"] == round((rate + rate2) / 2, 4)
+    assert LemonadeGame.from_payload(game.to_payload()).current_popularity() == (
+        game.current_popularity()
+    )

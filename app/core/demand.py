@@ -22,6 +22,14 @@ against it:
 So half of a type buys at exactly ``wtp``, 95 % at ``wtp - above * budget`` and
 5 % at ``wtp + above * budget``. A price under ``budget * (1 - tolerance.price.below)``
 looks suspicious: P(buy) is scaled by ``price / that floor``.
+
+Popularity — carried across the game, fixed for a day, applied on top of P(buy):
+
+    rate        = cups sold / visitors of one day (sold-out visitors count as not sold)
+    popularity  = mean(rate of every played day with visitors), else starting_popularity
+    final P     = min(1, P(buy) * (0.5 + popularity))
+
+So 0.5 is neutral, 0 halves the chance and 1 raises it by half.
 """
 
 from __future__ import annotations
@@ -108,6 +116,16 @@ def buy_probability(person: PersonType, price: float, wtp: float) -> float:
     if price < floor:
         probability *= price / floor
     return probability
+
+
+def popularity(rates: list[float], start: float) -> float:
+    """The mean of the daily success rates so far; ``start`` until there is one."""
+    return statistics.mean(rates) if rates else start
+
+
+def apply_popularity(probability: float, popularity: float) -> float:
+    """Scale a buy chance by ``0.5 + popularity``: neutral at 0.5, capped at 1."""
+    return min(1.0, probability * (0.5 + popularity))
 
 
 def refusal_reason(

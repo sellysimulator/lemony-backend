@@ -55,6 +55,10 @@ these, then builds the Docker image; Render deploys only after it passes:
   - `P(buy) = 1 / (1 + exp((price − wtp) / spread))` with `spread = tolerances.price.above × budget / ln 19`: half of the type buys at `wtp`, 5 % at `wtp + above × budget`.
   - Under `budget × (1 − tolerances.price.below)` a cup looks suspicious and `P(buy)` is scaled by `price ÷ that floor`.
   - A refusal reads `too_cheap` under that floor. Otherwise it reads `too_pricey` when the price sits further over the budget (in units of `above × budget`) than the worst ingredient sits under a perfect score, or else names that ingredient.
+- **Popularity.** A 0–1 value carried across the game, fixed for each day, applied on top of `P(buy)`: `final P = min(1, P(buy) × (0.5 + popularity))`, so 0.5 is neutral, 0 halves every chance and 1 raises it by half.
+  - A day's success rate is `cups sold ÷ visitors` (the day's `conversion`); visitors who met a sold-out stand count as not sold.
+  - `popularity = mean(success rate of every played day that had visitors)`; days with no visitors are skipped. Until the first such day it is the config's `starting_popularity` (default 0.5).
+  - Each day record carries the `popularity` applied that day; the game state carries the current one, and the summary its `final_popularity`.
 - **Packs.** Each ingredient is sold in packs, and each pack size has its own discount: `pack price = size × unit_cost × (1 − discount)`, rounded to the cent. Every batch remembers the unit price paid, so the day's `cost_per_cup` (ingredients used ÷ cups sold) and `perished_value` reflect discounts.
 - **Money rounding.** Every money value rounds to whole cents, halves away from zero, after trimming float noise (`app/core/money.py`). The frontend's `src/utils/money.ts` uses the same rule, and both test suites run the same cases in `tests/fixtures/rounding_cases.json` (copied in the frontend repo).
 - **Perishing.** Each purchase batch has a fresh period followed by a linear ramp: `hazard(age) = 0` while `age ≤ fresh_days`, `1` once `age ≥ max_days`, and `(age − fresh)/(max − fresh)` in between. Units are lost binomially at the end of each day.

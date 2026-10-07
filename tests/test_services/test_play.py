@@ -191,6 +191,10 @@ async def test_signed_in_game_reaches_profile_and_guest_claim(emits, firebase_to
     assert stats["games_played"] == 2
     detail = client.get(f"/api/v1/users/me/games/{gid}", headers=auth).json()
     assert detail["days"][0]["by_hour"] and detail["config"]["num_days"] == 1
+    day = detail["days"][0]
+    assert day["popularity"] == 0.5
+    assert detail["final_popularity"] == pytest.approx(round(day["buyers"] / day["visitors"], 4))
+    assert detail["final_popularity"] in {item["final_popularity"] for item in listing["items"]}
     assert client.get(
         "/api/v1/users/me/games", headers={"Authorization": "Bearer nope"}
     ).status_code in (401, 503)

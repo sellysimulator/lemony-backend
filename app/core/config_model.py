@@ -188,6 +188,9 @@ class GameConfig(_Strict):
     # How much the recipe moves what customers will pay: a perfect cup raises it to
     # budget x (1 + quality_swing), a cup they hate lowers it to budget x (1 - quality_swing).
     quality_swing: float = Field(ge=0, le=1)
+    # Popularity before the first day with visitors. Each buy chance is scaled by
+    # (0.5 + popularity), so 0.5 is neutral. Defaulted so configs saved before it still load.
+    starting_popularity: float = Field(default=0.5, ge=0, le=1)
     people_preferences: dict[str, PersonPreferences]
     weather_multipliers: dict[str, float]
     weather_temperature_ranges: dict[str, FloatRange]

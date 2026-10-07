@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .base import Base, TimestampMixin
 
 MONEY = Numeric(12, 2)
+SHARE = Numeric(5, 4)  # a 0-1 share such as popularity
 
 
 class Game(Base, TimestampMixin):
@@ -41,6 +42,8 @@ class Game(Base, TimestampMixin):
     total_visitors: Mapped[int] = mapped_column(Integer, nullable=False)
     total_buyers: Mapped[int] = mapped_column(Integer, nullable=False)
     total_sold_out: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Null for games finished before popularity existed.
+    final_popularity: Mapped[Decimal | None] = mapped_column(SHARE, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
     finished_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
 
@@ -79,6 +82,8 @@ class GameDay(Base):
     buyers: Mapped[int] = mapped_column(Integer, nullable=False)
     sold_out: Mapped[int] = mapped_column(Integer, nullable=False)
     refused: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The popularity applied that day; null for games finished before popularity existed.
+    popularity: Mapped[Decimal | None] = mapped_column(SHARE, nullable=True)
     perished_ice: Mapped[int] = mapped_column(Integer, nullable=False)
     perished_sugar: Mapped[int] = mapped_column(Integer, nullable=False)
     perished_lemons: Mapped[int] = mapped_column(Integer, nullable=False)

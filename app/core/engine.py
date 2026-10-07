@@ -20,10 +20,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from .config_model import GameConfig
 from .defaults import INGREDIENT_NAMES, PERSON_TYPES, RECIPE_INGREDIENTS
 from .demand import (
+    apply_popularity,
     buy_probability,
     expected_spawn,
     ingredient_scores,
     poisson,
+    popularity,
     recipe_quality,
     refusal_reason,
     willingness_to_pay,
@@ -140,6 +142,11 @@ class LemonadeGame:
         return cost, units, lots
 
     # ------------------------------------------------------------------ day
+    def current_popularity(self) -> float:
+        """Mean success rate (cups sold / visitors) of the days so far that had visitors."""
+        rates = [d["buyers"] / d["visitors"] for d in self.days if d["visitors"]]
+        return popularity(rates, self.config.starting_popularity)
+
     def _can_make_cup(self, recipe: dict[str, int]) -> bool:
         if self.inventory["cups"].total() < 1:
             return False
@@ -166,20 +173,24 @@ class LemonadeGame:
         multiplier = self.config.weather_multipliers[weather]
         rng = self._rng(self.day, "customers")
         mm = self.config.min_max_values
+        pop = self.current_popularity()
 
         events: list[dict[str, Any]] = []
         by_type = {k: {"visitors": 0, "buyers": 0, "sold_out": 0} for k in PERSON_TYPES}
         by_hour: list[dict[str, Any]] = []
         reasons: dict[str, int] = {}
-        # The recipe and price are fixed for the day, so each type's view of them is too.
+        # Recipe, price and popularity are fixed for the day, so each type's view of them is too.
         scores_by_type = {p.kind: ingredient_scores(p, recipe) for p in self.people}
         probability_by_type = {
-            p.kind: buy_probability(
-                p,
-                price,
-                willingness_to_pay(
-                    p, recipe_quality(scores_by_type[p.kind]), self.config.quality_swing
+            p.kind: apply_popularity(
+                buy_probability(
+                    p,
+                    price,
+                    willingness_to_pay(
+                        p, recipe_quality(scores_by_type[p.kind]), self.config.quality_swing
+                    ),
                 ),
+                pop,
             )
             for p in self.people
         }
@@ -255,6 +266,8 @@ class LemonadeGame:
             "sold_out": sum(1 for e in events if e["outcome"] == "sold_out"),
             "refused": sum(1 for e in events if e["outcome"] == "refused"),
             "conversion": round(buyers / visitors, 4) if visitors else 0.0,
+            # The popularity applied to today's buy chances (before today's rate counts).
+            "popularity": round(pop, 4),
             "perished": perished,
             "perished_value": perished_value,
             "cash_end": self.cash,
@@ -293,6 +306,7 @@ class LemonadeGame:
             "total_visitors": sum(d["visitors"] for d in self.days),
             "total_buyers": sum(d["buyers"] for d in self.days),
             "total_sold_out": sum(d["sold_out"] for d in self.days),
+            "final_popularity": round(self.current_popularity(), 4),
             "perished_totals": perished_totals,
             "days": self.days,
         }
@@ -306,6 +320,8 @@ class LemonadeGame:
             "phase": self.phase,
             "cash": self.cash,
             "today": {"weather": weather, "temperature": temperature},
+            # Applies to the next day played (today's, while planning).
+            "popularity": round(self.current_popularity(), 4),
             "inventory": {name: ing.view() for name, ing in self.inventory.items()},
             "days": self.days,
             "last_day_events": self.last_day_events,
