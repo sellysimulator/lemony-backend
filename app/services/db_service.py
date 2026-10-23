@@ -1,10 +1,14 @@
 """End-of-game persistence and reading finished games back.
 
 `persist_finished_game` runs once when a game ends: one transaction, idempotent
-on `public_id` (the live game id). It is synchronous — call it through
+on `public_id` (the live game id), one INSERT per table (the day, type and hour
+rows each go in one executemany). It is synchronous — call it through
 `anyio.to_thread.run_sync` from async code so the event loop never blocks on
 MySQL. It never raises: on failure it logs and returns None, and the live
 document keeps `persisted: false`.
+
+Every field of a day record is stored, so `load_game_detail` rebuilds the live
+summary exactly through the same builder (`engine.summarize`).
 """
 
 from __future__ import annotations
@@ -12,21 +16,29 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import Table, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.money import round_cents
 
 from ..core.defaults import INGREDIENT_NAMES, PERSON_TYPES
+from ..core.engine import summarize
 from ..models.game import Game, GameConfigRow, GameDay, GameDayHour, GameDayType
 from .stats_service import recompute_user_stats
 from .user_service import UserService
 
 logger = logging.getLogger(__name__)
 _users = UserService()
+
+# Core statements on the mapped tables, not the ORM unit of work: the ORM inserts
+# autoincrement rows one statement at a time on MySQL. None of these tables has
+# created_at/updated_at.
+_GAME_DAYS = cast(Table, GameDay.__table__)
+_GAME_DAY_TYPES = cast(Table, GameDayType.__table__)
+_GAME_DAY_HOURS = cast(Table, GameDayHour.__table__)
 
 
 def _money(value: float) -> Decimal:
@@ -43,6 +55,41 @@ def _dt(value: str) -> datetime:
 
 def is_guest(identity: str) -> bool:
     return identity.startswith("guest_")
+
+
+def _day_row(game_id: int, d: dict[str, Any]) -> dict[str, Any]:
+    inventory_end = d.get("inventory_end") or {}
+    return {
+        "game_id": game_id,
+        "day": d["day"],
+        "weather": d["weather"],
+        "temperature": Decimal(str(d["temperature"])),
+        "price": _money(d["price"]),
+        "recipe_ice": d["recipe"]["ice"],
+        "recipe_sugar": d["recipe"]["sugar"],
+        "recipe_lemons": d["recipe"]["lemons"],
+        "cost_per_cup": _money(d["cost_per_cup"]),
+        "bought_ice": d["purchased"]["ice"],
+        "bought_sugar": d["purchased"]["sugar"],
+        "bought_lemons": d["purchased"]["lemons"],
+        "bought_cups": d["purchased"]["cups"],
+        "spend": _money(d["spend"]),
+        "revenue": _money(d["revenue"]),
+        "profit": _money(d["profit"]),
+        "visitors": d["visitors"],
+        "buyers": d["buyers"],
+        "sold_out": d["sold_out"],
+        "refused": d["refused"],
+        "popularity": _share(d.get("popularity")),
+        "perished_ice": d["perished"]["ice"],
+        "perished_sugar": d["perished"]["sugar"],
+        "perished_lemons": d["perished"]["lemons"],
+        "perished_cups": d["perished"]["cups"],
+        "perished_value": _money(d["perished_value"]),
+        "cash_end": _money(d["cash_end"]),
+        **{f"inventory_end_{name}": inventory_end.get(name) for name in INGREDIENT_NAMES},
+        "refusal_reasons": d["refusal_reasons"],
+    }
 
 
 def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any]) -> Game:
@@ -81,44 +128,20 @@ def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any])
     db.add(game)
     db.flush()
     db.add(GameConfigRow(game_id=game.id, config=document["engine"]["config"]))
-    for d in summary["days"]:
-        db.add(
-            GameDay(
-                game_id=game.id,
-                day=d["day"],
-                weather=d["weather"],
-                temperature=Decimal(str(d["temperature"])),
-                price=_money(d["price"]),
-                recipe_ice=d["recipe"]["ice"],
-                recipe_sugar=d["recipe"]["sugar"],
-                recipe_lemons=d["recipe"]["lemons"],
-                cost_per_cup=_money(d["cost_per_cup"]),
-                bought_ice=d["purchased"]["ice"],
-                bought_sugar=d["purchased"]["sugar"],
-                bought_lemons=d["purchased"]["lemons"],
-                bought_cups=d["purchased"]["cups"],
-                spend=_money(d["spend"]),
-                revenue=_money(d["revenue"]),
-                profit=_money(d["profit"]),
-                visitors=d["visitors"],
-                buyers=d["buyers"],
-                sold_out=d["sold_out"],
-                refused=d["refused"],
-                popularity=_share(d.get("popularity")),
-                perished_ice=d["perished"]["ice"],
-                perished_sugar=d["perished"]["sugar"],
-                perished_lemons=d["perished"]["lemons"],
-                perished_cups=d["perished"]["cups"],
-                perished_value=_money(d["perished_value"]),
-                cash_end=_money(d["cash_end"]),
-                refusal_reasons=d["refusal_reasons"],
-            )
+    days = summary["days"]
+    if days:
+        db.execute(insert(_GAME_DAYS), [_day_row(game.id, d) for d in days])
+        db.execute(
+            insert(_GAME_DAY_TYPES),
+            [
+                {"game_id": game.id, "day": d["day"], "person_type": kind, **d["by_type"][kind]}
+                for d in days
+                for kind in PERSON_TYPES
+            ],
         )
-        db.add_all(
-            GameDayType(game_id=game.id, day=d["day"], person_type=kind, **d["by_type"][kind])
-            for kind in PERSON_TYPES
-        )
-        db.add_all(GameDayHour(game_id=game.id, day=d["day"], **h) for h in d["by_hour"])
+        hours = [{"game_id": game.id, "day": d["day"], **h} for d in days for h in d["by_hour"]]
+        if hours:
+            db.execute(insert(_GAME_DAY_HOURS), hours)
     db.flush()
     if user_id is not None:
         recompute_user_stats(db, user_id)
@@ -134,11 +157,15 @@ def persist_finished_game(document: dict[str, Any], summary: dict[str, Any]) -> 
         db.commit()
         return game.public_id
     except IntegrityError:
+        # Another writer stored the same game first: that copy is the result.
         db.rollback()
-        winner = db.execute(
-            select(Game.public_id).where(Game.public_id == document["game_id"])
-        ).scalar_one_or_none()
-        return winner
+        try:
+            return db.execute(
+                select(Game.public_id).where(Game.public_id == document["game_id"])
+            ).scalar_one_or_none()
+        except Exception:
+            logger.exception("Failed to persist finished game.")
+            return None
     except Exception:
         db.rollback()
         logger.exception("Failed to persist finished game.")
@@ -194,37 +221,46 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
     days: list[dict[str, Any]] = []
     for d in days_rows:
         perished = {name: getattr(d, f"perished_{name}") for name in INGREDIENT_NAMES}
-        days.append(
-            {
-                "day": d.day,
-                "weather": d.weather,
-                "temperature": float(d.temperature),
-                "price": float(d.price),
-                "recipe": {"ice": d.recipe_ice, "sugar": d.recipe_sugar, "lemons": d.recipe_lemons},
-                "cost_per_cup": float(d.cost_per_cup),
-                "purchased": {name: getattr(d, f"bought_{name}") for name in INGREDIENT_NAMES},
-                "spend": float(d.spend),
-                "revenue": float(d.revenue),
-                "profit": float(d.profit),
-                "visitors": d.visitors,
-                "buyers": d.buyers,
-                "sold_out": d.sold_out,
-                "refused": d.refused,
-                "conversion": round(d.buyers / d.visitors, 4) if d.visitors else 0.0,
-                "popularity": _f(d.popularity),
-                "perished": perished,
-                "perished_value": float(d.perished_value),
-                "cash_end": float(d.cash_end),
-                "by_type": by_type.get(d.day, {}),
-                "by_hour": by_hour.get(d.day, []),
-                "refusal_reasons": d.refusal_reasons,
-            }
-        )
-    detail = game_row_summary(game)
-    detail["perished_totals"] = {
-        name: sum(day["perished"][name] for day in days) for name in INGREDIENT_NAMES
-    }
-    detail["days"] = days
+        day: dict[str, Any] = {
+            "day": d.day,
+            "weather": d.weather,
+            "temperature": float(d.temperature),
+            "price": float(d.price),
+            "recipe": {"ice": d.recipe_ice, "sugar": d.recipe_sugar, "lemons": d.recipe_lemons},
+            "cost_per_cup": float(d.cost_per_cup),
+            "purchased": {name: getattr(d, f"bought_{name}") for name in INGREDIENT_NAMES},
+            "spend": float(d.spend),
+            "revenue": float(d.revenue),
+            "profit": float(d.profit),
+            "visitors": d.visitors,
+            "buyers": d.buyers,
+            "sold_out": d.sold_out,
+            "refused": d.refused,
+            "conversion": round(d.buyers / d.visitors, 4) if d.visitors else 0.0,
+            "popularity": _f(d.popularity),
+            "perished": perished,
+            "perished_value": float(d.perished_value),
+            "cash_end": float(d.cash_end),
+            "by_type": by_type.get(d.day, {}),
+            "by_hour": by_hour.get(d.day, []),
+            "refusal_reasons": d.refusal_reasons,
+        }
+        inventory_end = {name: getattr(d, f"inventory_end_{name}") for name in INGREDIENT_NAMES}
+        if None not in inventory_end.values():  # absent on games stored before it was kept
+            day["inventory_end"] = inventory_end
+        days.append(day)
+    detail = summarize(
+        num_days=game.num_days,
+        starting_cash=float(game.starting_cash),
+        final_cash=float(game.final_cash),
+        final_popularity=_f(game.final_popularity),
+        days=days,
+    )
+    detail.update(
+        public_id=game.public_id,
+        started_at=game.started_at.isoformat(),
+        finished_at=game.finished_at.isoformat(),
+    )
     config_row = db.get(GameConfigRow, game.id)
     detail["config"] = config_row.config if config_row else None
     return detail

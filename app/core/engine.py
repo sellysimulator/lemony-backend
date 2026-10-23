@@ -31,12 +31,12 @@ from .demand import (
     willingness_to_pay,
 )
 from .ingredients import Ingredient
+from .limits import MAX_PACKS_PER_SIZE
 from .money import round_cents
 from .people import PersonType, build_people
 from .weather import roll_day_weather
 
 Phase = Literal["planning", "played", "finished"]
-MAX_PACKS_PER_SIZE = 100
 
 
 class PlanError(ValueError):
@@ -54,6 +54,38 @@ class DayPlan(BaseModel):
 
 def _money(value: float) -> float:
     return round_cents(value)
+
+
+def summarize(
+    *,
+    num_days: int,
+    starting_cash: float,
+    final_cash: float,
+    final_popularity: float | None,
+    days: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """The game summary, built from the day records.
+
+    The one builder for a live game (``LemonadeGame.summary``) and a stored one
+    (``db_service.load_game_detail``), so the two cannot drift apart.
+    """
+    return {
+        "num_days": num_days,
+        "days_played": len(days),
+        "starting_cash": _money(starting_cash),
+        "final_cash": final_cash,
+        "total_profit": _money(final_cash - starting_cash),
+        "total_revenue": _money(sum(d["revenue"] for d in days)),
+        "total_spend": _money(sum(d["spend"] for d in days)),
+        "total_visitors": sum(d["visitors"] for d in days),
+        "total_buyers": sum(d["buyers"] for d in days),
+        "total_sold_out": sum(d["sold_out"] for d in days),
+        "final_popularity": final_popularity,
+        "perished_totals": {
+            name: sum(d["perished"][name] for d in days) for name in INGREDIENT_NAMES
+        },
+        "days": days,
+    }
 
 
 class LemonadeGame:
@@ -292,24 +324,13 @@ class LemonadeGame:
 
     # --------------------------------------------------------------- views
     def summary(self) -> dict[str, Any]:
-        perished_totals = {
-            name: sum(d["perished"][name] for d in self.days) for name in INGREDIENT_NAMES
-        }
-        return {
-            "num_days": self.config.num_days,
-            "days_played": len(self.days),
-            "starting_cash": _money(self.config.starting_cash),
-            "final_cash": self.cash,
-            "total_profit": _money(self.cash - self.config.starting_cash),
-            "total_revenue": _money(sum(d["revenue"] for d in self.days)),
-            "total_spend": _money(sum(d["spend"] for d in self.days)),
-            "total_visitors": sum(d["visitors"] for d in self.days),
-            "total_buyers": sum(d["buyers"] for d in self.days),
-            "total_sold_out": sum(d["sold_out"] for d in self.days),
-            "final_popularity": round(self.current_popularity(), 4),
-            "perished_totals": perished_totals,
-            "days": self.days,
-        }
+        return summarize(
+            num_days=self.config.num_days,
+            starting_cash=self.config.starting_cash,
+            final_cash=self.cash,
+            final_popularity=round(self.current_popularity(), 4),
+            days=self.days,
+        )
 
     def view(self) -> dict[str, Any]:
         """Everything the client renders. Never includes the seed of future days' weather."""

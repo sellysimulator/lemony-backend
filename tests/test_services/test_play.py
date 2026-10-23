@@ -156,6 +156,33 @@ async def test_invalid_config_and_plan_refused(emits):
     assert emits.of("error")[-1]["code"] == "WRONG_DAY"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path, value, message",
+    [
+        (("starting_cash",), None, "starting_cash: Input should be a valid number"),
+        (("ingredients", "lemons", "unit_cost"), None, "ingredients.lemons.unit_cost"),
+        (("starting_cash",), 1_000_001, "starting_cash: Input should be less than or equal to"),
+        (("weather_temperature_ranges", "sunny", "max"), 61, "sunny temperature range"),
+    ],
+)
+async def test_a_config_with_a_cleared_or_out_of_range_value_is_refused(
+    emits, path, value, message
+):
+    guest = new_guest()
+    await connect("s1", {"guestId": guest})
+    bad = config()
+    node = bad
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    await game.create_game("s1", {"config": bad})
+    err = emits.of("error")[-1]
+    assert err["code"] == "INVALID_CONFIG" and message in err["message"]
+    assert not emits.of("game_created") and not emits.of("game_state")
+    assert await state_service.state_svc.get_active_game_id(guest) is None
+
+
 # ---------------------------------------------------------- profile/REST
 @pytest.mark.asyncio
 async def test_signed_in_game_reaches_profile_and_guest_claim(emits, firebase_tokens):

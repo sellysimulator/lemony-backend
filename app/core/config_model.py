@@ -15,10 +15,29 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .defaults import (
     INGREDIENT_NAMES,
-    MAX_NUM_DAYS,
     PERSON_TYPES,
     RECIPE_INGREDIENTS,
     WEATHER_TYPES,
+)
+from .limits import (
+    MAX_AVERAGE_EXPENSE,
+    MAX_FRESH_DAYS,
+    MAX_HOUR,
+    MAX_MAX_DAYS,
+    MAX_NUM_DAYS,
+    MAX_PACK_DISCOUNT,
+    MAX_PACK_SIZE,
+    MAX_PACKS,
+    MAX_PER_CUP,
+    MAX_PRICE,
+    MAX_PRICE_TOLERANCE_ABOVE,
+    MAX_SPAWN_PER_HOUR,
+    MAX_STARTING_CASH,
+    MAX_TEMPERATURE,
+    MAX_TOLERANCE,
+    MAX_UNIT_COST,
+    MAX_WEATHER_MULTIPLIER,
+    MIN_TEMPERATURE,
 )
 from .money import round_cents
 
@@ -26,7 +45,8 @@ Weather = Literal["sunny", "cloudy", "rainy", "snowy"]
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # No NaN or infinity anywhere: JSON cannot carry them back to the client or into MySQL.
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class IntRange(_Strict):
@@ -63,24 +83,26 @@ class MinMaxValues(_Strict):
     def _bounds(self) -> MinMaxValues:
         for name in RECIPE_INGREDIENTS:
             rng: IntRange = getattr(self, name)
-            if rng.min < 0 or rng.max > 20:
-                raise ValueError(f"{name} per cup must stay within 0-20")
-        if not (0 <= self.hour.min < self.hour.max <= 23):
-            raise ValueError("Opening hours must satisfy 0 <= open < close <= 23")
-        if self.temperature.min < -30 or self.temperature.max > 60:
-            raise ValueError("Temperature range must stay within -30..60 °C")
+            if rng.min < 0 or rng.max > MAX_PER_CUP:
+                raise ValueError(f"{name} per cup must stay within 0-{MAX_PER_CUP}")
+        if not (0 <= self.hour.min < self.hour.max <= MAX_HOUR):
+            raise ValueError(f"Opening hours must satisfy 0 <= open < close <= {MAX_HOUR}")
+        if self.temperature.min < MIN_TEMPERATURE or self.temperature.max > MAX_TEMPERATURE:
+            raise ValueError(
+                f"Temperature range must stay within {MIN_TEMPERATURE}..{MAX_TEMPERATURE} °C"
+            )
         if self.temperature.min == self.temperature.max:
             raise ValueError("Temperature range must not be a single value")
-        if self.price.min < 0 or self.price.max > 100 or self.price.max <= 0:
-            raise ValueError("Price range must stay within 0-100 and max must be above 0")
+        if self.price.min < 0 or self.price.max > MAX_PRICE or self.price.max <= 0:
+            raise ValueError(f"Price range must stay within 0-{MAX_PRICE} and max must be above 0")
         return self
 
 
 class Tolerance(_Strict):
     """How far below / above a preference a customer still accepts, down to a score of 0."""
 
-    below: float = Field(ge=0, le=20)
-    above: float = Field(ge=0, le=20)
+    below: float = Field(ge=0, le=MAX_TOLERANCE)
+    above: float = Field(ge=0, le=MAX_TOLERANCE)
 
 
 class Tolerances(_Strict):
@@ -95,14 +117,17 @@ class Tolerances(_Strict):
     def _price_shares(self) -> Tolerances:
         if self.price.below > 1:
             raise ValueError("price tolerance below must be a share of the budget, 0-1 (0-100%)")
-        if not 0 < self.price.above <= 5:
-            raise ValueError("price tolerance above must be above 0 and at most 5 (500%)")
+        if not 0 < self.price.above <= MAX_PRICE_TOLERANCE_ABOVE:
+            raise ValueError(
+                "price tolerance above must be above 0 and at most "
+                f"{MAX_PRICE_TOLERANCE_ABOVE} ({MAX_PRICE_TOLERANCE_ABOVE:.0%})"
+            )
         return self
 
 
 class PersonPreferences(_Strict):
-    spawn_per_hour: float = Field(ge=0, le=200)
-    average_expense: float = Field(ge=0, le=100)
+    spawn_per_hour: float = Field(ge=0, le=MAX_SPAWN_PER_HOUR)
+    average_expense: float = Field(ge=0, le=MAX_AVERAGE_EXPENSE)
     preferred_degrees: float
     preferred_weather: Weather
     preferred_ice: int
@@ -110,9 +135,6 @@ class PersonPreferences(_Strict):
     preferred_lemons: int
     preferred_hour: int
     tolerances: Tolerances
-
-
-MAX_PACK_DISCOUNT = 0.9
 
 
 class PackOption(_Strict):
@@ -123,18 +145,18 @@ class PackOption(_Strict):
 
     @model_validator(mode="after")
     def _bounds(self) -> PackOption:
-        if not 1 <= self.size <= 10_000:
-            raise ValueError("pack sizes must be between 1 and 10000 units")
+        if not 1 <= self.size <= MAX_PACK_SIZE:
+            raise ValueError(f"pack sizes must be between 1 and {MAX_PACK_SIZE} units")
         if not 0 <= self.discount <= MAX_PACK_DISCOUNT:
             raise ValueError(f"pack discounts must be between 0% and {MAX_PACK_DISCOUNT:.0%}")
         return self
 
 
 class IngredientConfig(_Strict):
-    unit_cost: float = Field(ge=0, le=100)
-    packs: list[PackOption] = Field(min_length=1, max_length=8)
-    fresh_days: int = Field(ge=0, le=60)
-    max_days: int = Field(ge=1, le=61)
+    unit_cost: float = Field(ge=0, le=MAX_UNIT_COST)
+    packs: list[PackOption] = Field(min_length=1, max_length=MAX_PACKS)
+    fresh_days: int = Field(ge=0, le=MAX_FRESH_DAYS)
+    max_days: int = Field(ge=1, le=MAX_MAX_DAYS)
     never_perishes: bool = False
 
     @model_validator(mode="before")
@@ -183,7 +205,7 @@ def _exact_keys(value: dict, expected: tuple[str, ...], what: str) -> dict:
 
 class GameConfig(_Strict):
     num_days: int = Field(ge=1, le=MAX_NUM_DAYS)
-    starting_cash: float = Field(ge=0, le=1_000_000)
+    starting_cash: float = Field(ge=0, le=MAX_STARTING_CASH)
     min_max_values: MinMaxValues
     # How much the recipe moves what customers will pay: a perfect cup raises it to
     # budget x (1 + quality_swing), a cup they hate lowers it to budget x (1 - quality_swing).
@@ -206,14 +228,23 @@ class GameConfig(_Strict):
     def _multiplier_keys(cls, value: dict[str, float]) -> dict[str, float]:
         _exact_keys(value, WEATHER_TYPES, "weather_multipliers")
         for name, mult in value.items():
-            if not 0 <= mult <= 3:
-                raise ValueError(f"weather multiplier for {name} must be within 0-3")
+            if not 0 <= mult <= MAX_WEATHER_MULTIPLIER:
+                raise ValueError(
+                    f"weather multiplier for {name} must be within 0-{MAX_WEATHER_MULTIPLIER}"
+                )
         return value
 
     @field_validator("weather_temperature_ranges")
     @classmethod
-    def _range_keys(cls, value: dict) -> dict:
-        return _exact_keys(value, WEATHER_TYPES, "weather_temperature_ranges")
+    def _range_keys(cls, value: dict[str, FloatRange]) -> dict[str, FloatRange]:
+        _exact_keys(value, WEATHER_TYPES, "weather_temperature_ranges")
+        for name, rng in value.items():
+            if rng.min < MIN_TEMPERATURE or rng.max > MAX_TEMPERATURE:
+                raise ValueError(
+                    f"{name} temperature range must stay within "
+                    f"{MIN_TEMPERATURE}..{MAX_TEMPERATURE} °C"
+                )
+        return value
 
     @field_validator("ingredients")
     @classmethod

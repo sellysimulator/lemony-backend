@@ -6,11 +6,11 @@ from fastapi import APIRouter
 
 from ...core.defaults import (
     INGREDIENT_NAMES,
-    MAX_NUM_DAYS,
     PERSON_TYPES,
     WEATHER_TYPES,
     default_config,
 )
+from ...core.limits import MAX_NUM_DAYS
 from ...schemas.user import ConfigDefaultsResponse, ConfigValidateResponse
 from ...services.game_service import GameError, parse_config
 

@@ -28,8 +28,6 @@ PERSON_TYPES: tuple[str, ...] = ("Child", "Teenager", "Adult", "Senior")
 INGREDIENT_NAMES: tuple[str, ...] = ("ice", "sugar", "lemons", "cups")
 RECIPE_INGREDIENTS: tuple[str, ...] = ("ice", "sugar", "lemons")
 
-MAX_NUM_DAYS = 30
-
 # Bigger packs are cheaper per unit (economies of scale); spoilage is the catch.
 _DEFAULT_PACKS: list[dict[str, Any]] = [
     {"size": 100, "discount": 0.0},

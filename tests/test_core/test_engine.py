@@ -20,6 +20,7 @@ from app.core.demand import (
 )
 from app.core.engine import DayPlan, LemonadeGame, PlanError
 from app.core.ingredients import Batch, Ingredient
+from app.core.money import round_cents
 from app.core.people import build_people
 from app.core.weather import roll_day_weather
 
@@ -359,6 +360,25 @@ def test_money_and_inventory_accounting():
     assert rec["perished"]["cups"] == 0
     events = [e["arrive_min"] for e in game.last_day_events]
     assert events == sorted(events)
+
+
+def test_money_lines_are_cents_and_cash_chains_exactly():
+    data = default_config()
+    data.update(num_days=4, starting_cash=100.07)
+    for ing in data["ingredients"].values():
+        ing["unit_cost"] = 0.027  # pack prices with a third decimal before rounding
+    game = LemonadeGame(GameConfig.model_validate(data), seed=11)
+    cash = game.cash
+    for day, price in enumerate((0.33, 0.47, 0.61, 0.29), start=1):
+        rec = game.run_day(plan(price=price))["record"]
+        for key in ("spend", "revenue", "profit", "cash_end", "perished_value", "cost_per_cup"):
+            assert rec[key] == round_cents(rec[key]), key
+        assert rec["profit"] == round_cents(rec["revenue"] - rec["spend"])
+        assert rec["cash_end"] == round_cents(cash + rec["profit"])
+        cash = rec["cash_end"]
+        game.acknowledge_day(day)
+    summary = game.summary()
+    assert summary["total_profit"] == round_cents(sum(d["profit"] for d in summary["days"]))
 
 
 def test_day_lifecycle_and_finish():

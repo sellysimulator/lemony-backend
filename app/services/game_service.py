@@ -66,16 +66,28 @@ def engine_of(document: dict[str, Any]) -> LemonadeGame:
     return LemonadeGame.from_payload(document["engine"])
 
 
-def public_state(document: dict[str, Any]) -> dict[str, Any]:
-    """What the owner's client renders. Never carries identity or session_token."""
+# What a daily state leaves out: they grow with the game, and the round's own event
+# (`day_result` record + events, `game_finished` summary) carries the new part.
+HISTORY_KEYS = ("days", "last_day_events", "summary")
+
+
+def public_state(document: dict[str, Any], full: bool = True) -> dict[str, Any]:
+    """What the owner's client renders. Never carries identity or session_token.
+
+    The full state carries the history; the daily one (``full=False``) leaves
+    ``HISTORY_KEYS`` out, and the client keeps the history it already holds.
+    """
     engine = engine_of(document)
     state = engine.view()
     state.update(
         game_id=document["game_id"],
         persisted=document.get("persisted", False),
         public_id=document.get("public_id"),
-        summary=summary_of(document) if engine.phase == "finished" else None,
+        summary=summary_of(document) if full and engine.phase == "finished" else None,
     )
+    if not full:
+        for key in HISTORY_KEYS:
+            del state[key]
     return state
 
 

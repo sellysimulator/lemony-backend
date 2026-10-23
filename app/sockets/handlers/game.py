@@ -2,13 +2,19 @@
 
 | client -> server                               | server -> client                          |
 |------------------------------------------------|-------------------------------------------|
-| create_game {config, replace?}                 | game_created {game_id, session_token} + game_state |
-| resume_game {game_id?, session_token?}         | game_state, or no_active_game             |
-| request_state {game_id}                        | game_state                                |
-| submit_day {game_id, day, purchases, price, recipe} | day_result (+ game_finished, game_persisted on the last day) |
-| ack_day {game_id, day}                         | game_state                                |
+| create_game {config, replace?}                 | game_created {game_id, session_token} + game_state (full) |
+| resume_game {game_id?, session_token?}         | game_state (full), or no_active_game      |
+| request_state {game_id}                        | game_state (full)                         |
+| submit_day {game_id, day, purchases, price, recipe} | day_result {day, record, events, duplicate, state (daily)} (+ game_finished, game_persisted on the last day) |
+| ack_day {game_id, day}                         | game_state (daily)                        |
 | abandon_game {game_id}                         | game_abandoned                            |
 | (any refusal)                                  | error {code, message}                     |
+
+`game_state` is `{seq, full, state}`. A full state carries the history (`days`,
+`last_day_events`, and `summary` once finished); a daily state leaves those out
+so a day's events do not grow with the game. The client appends
+`day_result.record` to the days it holds (only when its day is later than the
+last one held) and takes the summary from `game_finished`. Every resync is full.
 
 Every server event carries a monotonic per-game `seq`. `session_token` is sent
 in exactly one event, `game_created`, to the creating sid.
@@ -34,10 +40,10 @@ async def _error(sid: str, code: str, message: str) -> None:
     await socket_manager.emit_to_sid(sid, "error", {"code": code, "message": message})
 
 
-async def _send_state(sid: str, document: dict[str, Any]) -> None:
+async def _send_state(sid: str, document: dict[str, Any], full: bool = True) -> None:
     seq = await gs.bump_seq(document)
     await socket_manager.emit_to_sid(
-        sid, "game_state", {"seq": seq, "state": gs.public_state(document)}
+        sid, "game_state", {"seq": seq, "full": full, "state": gs.public_state(document, full)}
     )
 
 
@@ -138,7 +144,7 @@ async def submit_day(sid: str, data: Any = None) -> None:
             "record": result["record"],
             "events": result["events"],
             "duplicate": duplicate,
-            "state": gs.public_state(document),
+            "state": gs.public_state(document, full=False),
         },
     )
     if document["engine"]["phase"] == "finished" and not duplicate:
@@ -157,7 +163,7 @@ async def ack_day(sid: str, data: Any = None) -> None:
     except gs.GameError as exc:
         await _error(sid, exc.code, exc.message)
         return
-    await _send_state(sid, document)
+    await _send_state(sid, document, full=False)
 
 
 @sio.event

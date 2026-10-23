@@ -90,6 +90,11 @@ class GameDay(Base):
     perished_cups: Mapped[int] = mapped_column(Integer, nullable=False)
     perished_value: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     cash_end: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    # Stock left after the night; null for games finished before it was stored.
+    inventory_end_ice: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inventory_end_sugar: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inventory_end_lemons: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inventory_end_cups: Mapped[int | None] = mapped_column(Integer, nullable=True)
     refusal_reasons: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
 
 

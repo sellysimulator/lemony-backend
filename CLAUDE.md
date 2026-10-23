@@ -56,7 +56,7 @@ else from the template needs the user's explicit OK.
 ## Architecture in one pass
 
 - **`app/core/` engine modules are pure** (`engine`, `demand`, `people`, `weather`,
-  `ingredients`, `defaults`, `config_model`, `money`): stdlib + pydantic only, no settings,
+  `ingredients`, `defaults`, `config_model`, `money`, `limits`): stdlib + pydantic only, no settings,
   services, DB or I/O. `core/firebase.py` and `core/checks/` are *not* pure (they read
   settings) — the "pure" rule applies to the engine modules, not the package.
 - **`LemonadeGame`** (`core/engine.py`) is rebuilt from its JSON payload on every service
@@ -64,6 +64,18 @@ else from the template needs the user's explicit OK.
 - **`services/game_service.py` is the only code that mutates a live game document.** It
   owns locking, ownership checks, `GameError(code, message)` refusals, and end-of-game
   persistence (`db_service.persist_finished_game`, once, idempotent on `public_id`).
+- **Persistence** is one transaction with one executemany per child table; a failure is
+  logged and returns `None`, never raising into the game. Every field of the day record is
+  stored, and `engine.summarize()` builds both the live summary and the stored one;
+  `tests/test_services/test_persistence.py` checks that the two match.
+- **`app/core/limits.py` holds every hard limit**, apart from `config_model` so code that
+  needs only a limit doesn't import the whole config. Every player-supplied number has an
+  upper bound there; `tests/test_core/test_limits.py` sets each one far out of range
+  (±1e12, ±inf, NaN) and expects a refusal.
+- **History goes out only in full states.** `game_state` is `{seq, full, state}`: full on
+  create, resume and `request_state`, daily (no `days`, `last_day_events` or `summary`)
+  after `ack_day` and inside `day_result`. The client appends `day_result.record` to the
+  days it holds. Details in the `game.py` docstring.
 - **`services/state_service.py` + `state_backend.py`**: keys `game:<id>`, `active:<identity>`,
   locks `lock:game:<id>` / `lock:active:<identity>`, TTL `GAME_TTL_SECONDS`.
 - **Auto-discovery everywhere.** A new REST router (module exporting `router` in
@@ -93,7 +105,10 @@ stubs), `attr-defined` on DML `rowcount` (SQLAlchemy types `execute()` as `Resul
 
 ## Contracts that span both repos
 
-Change these together, backend first, and ship both halves in the same window:
+Change these together, backend first, and ship both halves in the same window. The
+exception: when the backend stops sending a field the live frontend reads (as when round
+events dropped the history), ship the frontend first, or an open tab on the old frontend
+crashes until it is reloaded.
 
 | What | Backend | Frontend |
 |---|---|---|
@@ -105,6 +120,7 @@ Change these together, backend first, and ship both halves in the same window:
 | Pack price, purchase cost | `core/config_model.py` `pack_price`, `engine.purchase_cost` | `src/game/configMath.ts` `packPrice`, `src/game/costing.ts` |
 | Demand/perish maths (help & previews only) | `core/demand.py`, `people.py`, `ingredients.py`, `weather.py` | `src/game/configMath.ts` |
 | Vocabulary constants | `core/defaults.py` | `src/types/game.ts` |
+| Pack limits | `core/limits.py` `MAX_PACKS`, `MAX_PACK_SIZE`, `MAX_PACK_DISCOUNT` | `src/components/config/PacksEditor.tsx` `MAX_PACKS`, `MAX_SIZE`, `MAX_DISCOUNT_PCT` (hand-mirrored) |
 
 **Rounding rule:** trim `value*100` to 12 significant digits, round half away from zero,
 `/100`, normalise `-0`. `tests/test_core/test_money.py` fails if the two fixture copies
@@ -123,7 +139,8 @@ diverge (skips if the frontend isn't a sibling checkout).
 - **Ownership reads as absence.** Someone else's game returns "no such game", never a
   distinguishable error.
 - **Determinism.** Seed from `SystemRandom` at create; per-operation RNG is
-  `random.Random(f"{seed}:{day}:{purpose}")`. No global `random`. The order of RNG draws in
+  `random.Random(f"{seed}:{day}:{purpose}")`. No global `random`
+  (`tests/test_core/test_no_global_random.py` scans `app/` for it). The order of RNG draws in
   `run_day` (arrivals → shuffle → one draw per visitor) and the Poisson method are part of
   replay behaviour — changing them changes every stored game's outcome.
 - **Idempotency.** Every outbound event carries a per-game monotonic `seq` (the client drops

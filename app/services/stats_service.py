@@ -24,10 +24,11 @@ def recompute_user_stats(db: Session, user_id: int) -> UserStats:
     games, days, cups, visitors, profit, best = row
     best_game_id = None
     if best is not None:
+        # Ties on profit go to the latest game: finished last, then stored last.
         best_game_id = db.execute(
             select(Game.id)
             .where(Game.user_id == user_id, Game.total_profit == best)
-            .order_by(Game.finished_at.desc())
+            .order_by(Game.finished_at.desc(), Game.id.desc())
             .limit(1)
         ).scalar_one_or_none()
     stats = db.get(UserStats, user_id)
