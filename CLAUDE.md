@@ -56,7 +56,7 @@ else from the template needs the user's explicit OK.
 ## Architecture in one pass
 
 - **`app/core/` engine modules are pure** (`engine`, `demand`, `people`, `weather`,
-  `ingredients`, `defaults`, `config_model`, `money`, `limits`): stdlib + pydantic only, no settings,
+  `ingredients`, `defaults`, `config_model`, `money`, `limits`, `preview`): stdlib + pydantic only, no settings,
   services, DB or I/O. `core/firebase.py` and `core/checks/` are *not* pure (they read
   settings) — the "pure" rule applies to the engine modules, not the package.
 - **`LemonadeGame`** (`core/engine.py`) is rebuilt from its JSON payload on every service
@@ -76,6 +76,11 @@ else from the template needs the user's explicit OK.
   create, resume and `request_state`, daily (no `days`, `last_day_events` or `summary`)
   after `ack_day` and inside `day_result`. The client appends `day_result.record` to the
   days it holds. Details in the `game.py` docstring.
+- **`core/preview.py` `plan_preview(game, plan)`** feeds the morning plan's what-if curve:
+  expected chance, visitors, cups and margin across the price-input grid, built from the
+  `demand.py` functions `run_day` uses, with no RNG beyond today's weather. The
+  `preview_plan` handler answers with `plan_preview` (no `seq`, no lock, no save, refusals
+  inside the reply) and drops more than `PREVIEW_LIMIT` (5) requests per second per sid.
 - **`services/state_service.py` + `state_backend.py`**: keys `game:<id>`, `active:<identity>`,
   locks `lock:game:<id>` / `lock:active:<identity>`, TTL `GAME_TTL_SECONDS`.
 - **Auto-discovery everywhere.** A new REST router (module exporting `router` in
@@ -113,6 +118,8 @@ crashes until it is reloaded.
 | What | Backend | Frontend |
 |---|---|---|
 | Socket events & payloads | `app/sockets/handlers/game.py` (+ `connection.py` handshake) | `src/api/socketHandlers.ts`, `src/types/game.ts` |
+| Plan preview (`preview_plan` → `plan_preview`) | `app/core/preview.py`, `app/sockets/handlers/game.py` | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts`, `src/components/plan/` |
+| Price grid step | `core/preview.py` `PRICE_STEP` (0.05) | `src/components/plan/PlanDay.tsx` price input `step` (hand-mirrored) |
 | REST shapes | `app/schemas/user.py`, `app/api/v1/*` | `src/api/rest.ts` |
 | Engine output shapes (`view()`, day record, `summary()`) | `app/core/engine.py` | `src/types/game.ts` (hand-written, no codegen) |
 | Money rounding | `app/core/money.py` `round_cents` | `src/utils/money.ts` `roundCents` |
@@ -144,7 +151,7 @@ diverge (skips if the frontend isn't a sibling checkout).
   `run_day` (arrivals → shuffle → one draw per visitor) and the Poisson method are part of
   replay behaviour — changing them changes every stored game's outcome.
 - **Idempotency.** Every outbound event carries a per-game monotonic `seq` (the client drops
-  stale ones). `submit_day` replays return the stored record with `duplicate=True`;
+  stale ones), except `plan_preview`, a request-scoped reply matched by `request_id`. `submit_day` replays return the stored record with `duplicate=True`;
   `persist_if_finished` is safe to repeat and `resume_game` retries it.
 - **Game formulas belong to the user.** Keep existing formulas; if one looks wrong, flag it
   as an explicit before/after proposal rather than rewriting it inside another change.
@@ -167,7 +174,9 @@ diverge (skips if the frontend isn't a sibling checkout).
 - **`app/db/base.py` must import `from ..models.base import Base`** — `.base` is a
   self-import.
 - **Error handling.** Sockets: raise `GameError(code, message)` for refusals → `error
-  {code, message}`; handlers are `@sio.event` + `@guarded()`, which logs handler + sid (never
+  {code, message}` (except `preview_plan`, whose refusals go inside `plan_preview` as an
+  `error: {code, message}` field, since the client's `error` listener toasts and clears the stored
+  game on `NO_GAME`); handlers are `@sio.event` + `@guarded()`, which logs handler + sid (never
   the payload) and emits a generic `SERVER_ERROR`. REST: `HTTPException` with a fixed
   string `detail`, `logger.exception` server-side, `raise ... from None`; never `str(e)`.
 - **Startup never hard-fails on a missing credential.** No `FIREBASE_SERVICE_ACCOUNT_JSON`

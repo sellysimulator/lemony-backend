@@ -26,7 +26,7 @@ these, then builds the Docker image; Render deploys only after it passes:
 
 | Path                              | What it does                                                                                                                                                                 |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app/core/`                     | The game engine. It is pure: no I/O, and all randomness is seeded. Files:`defaults`, `config_model`, `limits`, `ingredients`, `people`, `weather`, `demand`, `engine`. |
+| `app/core/`                     | The game engine. It is pure: no I/O, and all randomness is seeded. Files:`defaults`, `config_model`, `limits`, `ingredients`, `people`, `weather`, `demand`, `engine`, `preview` (the morning plan's what-if curve). |
 | `app/services/state_backend.py` | Holds live game state. With`REDIS_ENABLED=false` (the default) it uses the MySQL `live_games` table, so games survive a restart. Only one instance may run in this mode. |
 | `app/services/game_service.py`  | Creates games, submits and acknowledges days, abandons games, and persists them. Every mutation runs under the game lock.                                                    |
 | `app/services/db_service.py`    | Writes a finished game once, as a single idempotent transaction. It also reads games back for the profile.                                                                   |
@@ -42,7 +42,10 @@ these, then builds the Docker image; Render deploys only after it passes:
 | `submit_day {game_id, day, purchases, price, recipe}`  | `day_result`. On the last day it is followed by `game_finished` and `game_persisted`. |
 | `ack_day {game_id, day}` / `request_state {game_id}` | `game_state`                                                                              |
 | `abandon_game {game_id}`                               | `game_abandoned`                                                                          |
+| `preview_plan {request_id, game_id, day, purchases, recipe}` | `plan_preview {request_id, day, prices, chance, expected_visitors, expected_cups, expected_margin, cups_possible, best_price}`, or `{request_id, day, error}` |
 | any refusal                                              | `error {code, message}`                                                                   |
+
+`plan_preview` is a request-scoped reply for the morning plan's what-if curve: expected values across the price-input grid, for today's weather and popularity. It is the one event without a `seq`; it changes no state, its refusals come inside the reply, and more than 5 requests per second per sid get no answer.
 
 `submit_day` is idempotent. Re-sending a day that has already been played returns the stored result with `duplicate: true`.
 
