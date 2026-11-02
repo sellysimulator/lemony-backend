@@ -53,3 +53,19 @@ async def test_the_last_day_leaves_the_summary_to_game_finished(emits):
     await game.resume_game("s1", {"game_id": game_id})
     resumed = emits.of("game_state")[-1]
     assert resumed["full"] is True and resumed["state"]["summary"]["days_played"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_final_submission_is_reported_to_the_player_before_the_game_ends(emits):
+    # Single-player has no host view to go stale: the one client that submitted always gets
+    # the final day's record and the finished state in the same reply, then the summary.
+    await connect("s1", {"guestId": new_guest()})
+    await game.create_game("s1", {"config": config(2)})
+    game_id = emits.of("game_created")[0]["game_id"]
+    for day in (1, 2):
+        await game.submit_day("s1", {"game_id": game_id, "day": day, **PLAN})
+        if day == 1:
+            await game.ack_day("s1", {"game_id": game_id, "day": 1})
+    last = emits.of("day_result")[-1]
+    assert last["record"]["day"] == 2 and last["state"]["phase"] == "finished"
+    assert emits.of("game_finished")[-1]["summary"]["days_played"] == 2
