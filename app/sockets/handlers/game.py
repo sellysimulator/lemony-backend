@@ -8,6 +8,7 @@
 | submit_day {game_id, day, purchases, price, recipe} | day_result {day, record, events, duplicate, state (daily)} (+ game_finished, game_persisted on the last day) |
 | ack_day {game_id, day}                         | game_state (daily)                        |
 | abandon_game {game_id}                         | game_abandoned                            |
+| preview_plan {request_id, game_id, day, purchases, recipe} | plan_preview {request_id, day, prices, chance, expected_visitors, expected_cups, expected_margin, cups_possible, best_price}, or {request_id, day, error: {code, message}}; no `seq`, changes no state; at most 5 per second per sid, the excess gets no reply |
 | (any refusal)                                  | error {code, message}                     |
 
 `game_state` is `{seq, full, state}`. A full state carries the history (`days`,
@@ -16,20 +17,35 @@ so a day's events do not grow with the game. The client appends
 `day_result.record` to the days it holds (only when its day is later than the
 last one held) and takes the summary from `game_finished`. Every resync is full.
 
-Every server event carries a monotonic per-game `seq`. `session_token` is sent
+Every server event carries a monotonic per-game `seq`, except `plan_preview`, a
+request-scoped reply that is not a state event. `session_token` is sent
 in exactly one event, `game_created`, to the creating sid.
 """
 
 from __future__ import annotations
 
 import logging
+import time
+from collections import deque
+from collections.abc import Callable
 from typing import Any
 
+from pydantic import ValidationError
+
+from ...core.engine import DayPlan, PlanError
+from ...core.preview import plan_preview
 from ...services import game_service as gs
 from ..errors import guarded
 from ..manager import sio, socket_manager
 
 logger = logging.getLogger(__name__)
+
+# At most PREVIEW_LIMIT preview_plan requests per PREVIEW_WINDOW seconds per sid, counted on
+# arrival (refused ones too). The excess gets no reply. Tests patch PREVIEW_CLOCK.
+PREVIEW_LIMIT = 5
+PREVIEW_WINDOW = 1.0
+PREVIEW_CLOCK: Callable[[], float] = time.monotonic
+_preview_times: dict[str, deque[float]] = {}
 
 
 def _identity(sid: str) -> str | None:
@@ -179,3 +195,59 @@ async def abandon_game(sid: str, data: Any = None) -> None:
         await _error(sid, exc.code, exc.message)
         return
     await socket_manager.emit_to_sid(sid, "game_abandoned", {"seq": 0, "game_id": game_id})
+
+
+def _preview_allowed(sid: str) -> bool:
+    now = PREVIEW_CLOCK()
+    for key in list(_preview_times):
+        stamps = _preview_times[key]
+        while stamps and now - stamps[0] >= PREVIEW_WINDOW:
+            stamps.popleft()
+        if not stamps:
+            del _preview_times[key]
+    stamps = _preview_times.setdefault(sid, deque())
+    stamps.append(now)
+    return len(stamps) <= PREVIEW_LIMIT
+
+
+@sio.event
+@guarded()
+async def preview_plan(sid: str, data: Any = None) -> None:
+    identity = _identity(sid)
+    if identity is None:
+        return
+    if not _preview_allowed(sid):
+        return
+    payload = _payload(data)
+    request_id = payload.get("request_id")
+    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 64:
+        return
+    day = payload.get("day")
+    reply: dict[str, Any] = {"request_id": request_id, "day": day if isinstance(day, int) else None}
+    try:
+        document = await gs.require_owned(identity, payload.get("game_id"))
+        engine = gs.engine_of(document)
+        if not isinstance(day, int):
+            raise gs.GameError("INVALID_PLAN", "day must be a number")
+        if engine.phase != "planning" or day != engine.day:
+            raise gs.GameError("WRONG_DAY", f"It is day {engine.day}, not day {day}.")
+        try:
+            plan = DayPlan.model_validate(
+                {
+                    **{k: payload.get(k) for k in ("purchases", "recipe") if k in payload},
+                    "price": engine.config.min_max_values.price.min,
+                }
+            )
+        except ValidationError as exc:
+            raise gs.GameError("INVALID_PLAN", gs.validation_message(exc)) from None
+        try:
+            reply.update(plan_preview(engine, plan))
+        except PlanError as exc:
+            raise gs.GameError("INVALID_PLAN", str(exc)) from None
+    except gs.GameError as exc:
+        reply = {
+            "request_id": request_id,
+            "day": reply["day"],
+            "error": {"code": exc.code, "message": exc.message},
+        }
+    await socket_manager.emit_to_sid(sid, "plan_preview", reply)
