@@ -22,12 +22,14 @@ PLAN = {
 }
 
 
-def finished_document(days: int = 3, identity: str = "guest_persist") -> dict[str, Any]:
+def finished_document(
+    days: int = 3, identity: str = "guest_persist", plans: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     data = default_config()
     data["num_days"] = days
     game = LemonadeGame(GameConfig.model_validate(data), seed=20261022)
     for day in range(1, days + 1):
-        game.run_day(DayPlan.model_validate(PLAN))
+        game.run_day(DayPlan.model_validate(plans[day - 1] if plans else PLAN))
         game.acknowledge_day(day)
     assert game.phase == "finished"
     return {
@@ -135,3 +137,20 @@ def test_the_best_game_tie_goes_to_the_latest_stored():
         assert games[0].finished_at == games[1].finished_at
         stats = db.get(UserStats, games[0].user_id)
         assert stats is not None and stats.best_game_id == games[1].id
+
+
+def test_a_day_with_no_cup_to_make_is_stored_and_read_back_without_a_cost():
+    # Day 2 buys nothing and last night melted the ice: not a single cup can be made.
+    document = finished_document(days=2, plans=[PLAN, {**PLAN, "purchases": {}}])
+    summary = gs.engine_of(document).summary()
+    assert summary["days"][0]["cost_per_cup"] is not None
+    assert summary["days"][1]["buyers"] == 0 and summary["days"][1]["cost_per_cup"] is None
+    public_id = db_service.persist_finished_game(document, summary)
+    assert public_id
+    document["public_id"] = public_id
+    with SessionLocal() as db:
+        game = db.execute(select(Game).where(Game.public_id == public_id)).scalar_one()
+        stored = db_service.load_game_detail(db, game)
+    assert stored["days"][1]["cost_per_cup"] is None
+    live = gs.summary_of(document)
+    assert {k: v for k, v in stored.items() if k not in ("started_at", "finished_at")} == live

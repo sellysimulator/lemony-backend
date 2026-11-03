@@ -30,6 +30,13 @@ Popularity — carried across the game, fixed for a day, applied on top of P(buy
     final P     = min(1, P(buy) * (0.5 + popularity))
 
 So 0.5 is neutral, 0 halves the chance and 1 raises it by half.
+
+Why a visitor said no — from the one draw ``u`` the engine already makes per
+visitor (``buys = u < final P``), so naming the reason draws nothing:
+
+    not_popular   if u < P(buy): they would have bought at a neutral popularity
+                  (only possible while popularity < 0.5)
+    otherwise     refusal_reason(): too_cheap, too_pricey or the worst ingredient
 """
 
 from __future__ import annotations
@@ -128,12 +135,26 @@ def apply_popularity(probability: float, popularity: float) -> float:
     return min(1.0, probability * (0.5 + popularity))
 
 
+NOT_POPULAR = "not_popular"
+
+
+def refused_for_popularity(draw: float, base: float) -> bool:
+    """Whether a refusal was popularity's doing: the visitor's draw would have bought at a
+    neutral popularity (0.5), where the chance is ``base`` itself.
+
+    Never true when popularity is 0.5 or more: the chance is then at least ``base``, so a
+    draw that refused is at least ``base`` too.
+    """
+    return draw < base
+
+
 def refusal_reason(
     person: PersonType, price: float, recipe: dict[str, int], scores: dict[str, float]
 ) -> str:
-    """Why a customer said no, phrased for the player.
+    """Why a customer said no to the price and recipe, phrased for the player.
 
-    Under the suspicious floor it is the price. Otherwise the price is blamed when
+    The engine asks only when popularity did not cause the refusal
+    (``refused_for_popularity``). Under the suspicious floor it is the price. Otherwise the price is blamed when
     it sits further over the budget (in units of the price tolerance) than the
     worst ingredient sits under a perfect score; else that ingredient is.
     """

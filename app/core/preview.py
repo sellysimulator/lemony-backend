@@ -9,8 +9,12 @@ functions ``run_day`` uses:
     p(type, price) = apply_popularity(buy_probability(price, wtp(recipe quality)), popularity)
     chance         = sum(weight * p) / sum(weight)
     expected_cups  = min(sum(weight * p), cups_possible)
+    expected_margin = expected_cups * (price - cost_per_cup)
 
-When stock binds, ``expected_cups`` is an upper bound on the simulated mean.
+``cups_possible`` and ``cost_per_cup`` come from ``LemonadeGame.cup_cost``: the cups
+the stock plus the planned packs make, and their average cost (the one meaning of
+cost per cup, see ``engine``). When stock binds, ``expected_cups`` is an upper bound
+on the simulated mean.
 """
 
 from __future__ import annotations
@@ -28,10 +32,11 @@ from .demand import (
     willingness_to_pay,
 )
 from .engine import DayPlan, LemonadeGame
+from .limits import PRICE_STEP
 from .money import round_cents
 
-# Mirrors the `step` of the price input in the frontend's PlanDay.tsx.
-PRICE_STEP = 0.05
+__all__ = ["MAX_POINTS", "PRICE_STEP", "plan_preview"]
+
 MAX_POINTS = 201
 
 _EPS = 1e-9
@@ -49,18 +54,9 @@ def _price_grid(low: float, high: float) -> list[float]:
     return [p for p in prices if p <= high + _EPS]
 
 
-def _cups_possible(game: LemonadeGame, recipe: dict[str, int], units: dict[str, int]) -> int:
-    limits = [game.inventory["cups"].total() + units.get("cups", 0)]
-    for name in RECIPE_INGREDIENTS:
-        amount = recipe[name]
-        if amount:
-            limits.append((game.inventory[name].total() + units.get(name, 0)) // amount)
-    return max(0, min(limits))
-
-
 def plan_preview(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
     """Expected visitors, chance, cups and margin across the price grid. Raises ``PlanError``."""
-    _, units, _ = game._validate_plan(plan)
+    _, _, lots = game._validate_plan(plan)
     recipe = {name: int(plan.recipe[name]) for name in RECIPE_INGREDIENTS}
     config = game.config
     mm = config.min_max_values
@@ -83,8 +79,7 @@ def plan_preview(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
         for person in game.people
     ]
 
-    cups_possible = _cups_possible(game, recipe, units)
-    cost_per_cup = game.list_cost_per_cup(recipe)
+    cups_possible, cost_per_cup = game.cup_cost(recipe, lots)
     prices = _price_grid(mm.price.min, mm.price.max)
     chance: list[float] = []
     expected_cups: list[float] = []
@@ -97,9 +92,10 @@ def plan_preview(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
         cups = min(buyers, float(cups_possible))
         chance.append(round(buyers / total_weight, 4) if total_weight > 0 else 0.0)
         expected_cups.append(round(cups, 2))
-        expected_margin.append(round_cents(cups * (price - cost_per_cup)))
+        # No cup can be made without a cost, so no stock means no margin.
+        margin = cups * (price - cost_per_cup) if cost_per_cup is not None else 0.0
+        expected_margin.append(round_cents(margin))
 
-    best = max(range(len(prices)), key=lambda i: (expected_margin[i], -i))
     return {
         "prices": prices,
         "chance": chance,
@@ -107,5 +103,5 @@ def plan_preview(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
         "expected_cups": expected_cups,
         "expected_margin": expected_margin,
         "cups_possible": cups_possible,
-        "best_price": prices[best],
+        "cost_per_cup": cost_per_cup,
     }

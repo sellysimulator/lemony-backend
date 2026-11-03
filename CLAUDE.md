@@ -71,14 +71,23 @@ else from the template needs the user's explicit OK.
 - **`app/core/limits.py` holds every hard limit**, apart from `config_model` so code that
   needs only a limit doesn't import the whole config. Every player-supplied number has an
   upper bound there; `tests/test_core/test_limits.py` sets each one far out of range
-  (±1e12, ±inf, NaN) and expects a refusal.
+  (±1e12, ±inf, NaN) and expects a refusal, and checks each served bound is the one
+  enforced. `public_limits()` is what the client reads (`GET /config/defaults` `limits`
+  and every game state's `limits`): the frontend hand-copies no bound.
+- **Cost per cup has one meaning, computed once:** `engine.cup_cost` — the average cost of
+  the cups the stock can make (held stock oldest first at the price paid, then today's
+  packs dearest per unit first). The preview sends it, the day record keeps it (what the
+  cups sold cost; with no sales, what the cups you could have made would have cost, or
+  null), and `POST /config/cup-cost` gives the help its day-1 examples. The client
+  computes none.
 - **History goes out only in full states.** `game_state` is `{seq, full, state}`: full on
   create, resume and `request_state`, daily (no `days`, `last_day_events` or `summary`)
   after `ack_day` and inside `day_result`. The client appends `day_result.record` to the
   days it holds. Details in the `game.py` docstring.
 - **`core/preview.py` `plan_preview(game, plan)`** feeds the morning plan's what-if curve:
-  expected chance, visitors, cups and margin across the price-input grid, built from the
-  `demand.py` functions `run_day` uses, with no RNG beyond today's weather. The
+  expected chance, visitors, cups and margin across the price-input grid, plus the plan's
+  `cups_possible` and `cost_per_cup`, built from the `demand.py` functions `run_day` uses
+  and `engine.cup_cost`, with no RNG beyond today's weather. There is no best price. The
   `preview_plan` handler answers with `plan_preview` (no `seq`, no lock, no save, refusals
   inside the reply) and drops more than `PREVIEW_LIMIT` (5) requests per second per sid.
 - **`services/state_service.py` + `state_backend.py`**: keys `game:<id>`, `active:<identity>`,
@@ -117,17 +126,18 @@ crashes until it is reloaded.
 
 | What | Backend | Frontend |
 |---|---|---|
-| Socket events & payloads | `app/sockets/handlers/game.py` (+ `connection.py` handshake) | `src/api/socketHandlers.ts`, `src/types/game.ts` |
-| Plan preview (`preview_plan` → `plan_preview`) | `app/core/preview.py`, `app/sockets/handlers/game.py` | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts`, `src/components/plan/` |
-| Price grid step | `core/preview.py` `PRICE_STEP` (0.05) | `src/components/plan/PlanDay.tsx` price input `step` (hand-mirrored) |
+| Socket events & payloads (incl. `retry_persist` → `game_persisted` / `game_persist_failed`) | `app/sockets/handlers/game.py` (+ `connection.py` handshake) | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts` |
+| Plan preview (`preview_plan` → `plan_preview`, incl. `cost_per_cup`) | `app/core/preview.py`, `app/sockets/handlers/game.py` | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts`, `src/components/plan/` |
+| Limits (every bound, the price step) | `core/limits.py` `public_limits()` → `/config/defaults` `limits` and game state `limits` | `src/types/game.ts` `Limits`; read by `ConfigPage`, `PacksEditor`, `PlanDay`, the help |
+| Limits fixture | `tests/fixtures/limits.json` (= `public_limits()`) | `src/__tests__/fixtures/limits.json` (byte-identical) |
+| Cost per cup | `engine.cup_cost` (preview, day record, `POST /config/cup-cost`) | shown only: `PlanDay`, `DayReport`, help `CupCostExample` |
 | REST shapes | `app/schemas/user.py`, `app/api/v1/*` | `src/api/rest.ts` |
 | Engine output shapes (`view()`, day record, `summary()`) | `app/core/engine.py` | `src/types/game.ts` (hand-written, no codegen) |
 | Money rounding | `app/core/money.py` `round_cents` | `src/utils/money.ts` `roundCents` |
 | Rounding fixture | `tests/fixtures/rounding_cases.json` | `src/__tests__/fixtures/rounding_cases.json` (byte-identical) |
-| Pack price, purchase cost | `core/config_model.py` `pack_price`, `engine.purchase_cost` | `src/game/configMath.ts` `packPrice`, `src/game/costing.ts` |
-| Demand/perish maths (help & previews only) | `core/demand.py`, `people.py`, `ingredients.py`, `weather.py` | `src/game/configMath.ts` |
-| Vocabulary constants | `core/defaults.py` | `src/types/game.ts` |
-| Pack limits | `core/limits.py` `MAX_PACKS`, `MAX_PACK_SIZE`, `MAX_PACK_DISCOUNT` | `src/components/config/PacksEditor.tsx` `MAX_PACKS`, `MAX_SIZE`, `MAX_DISCOUNT_PCT` (hand-mirrored) |
+| Pack price, purchase cost | `core/config_model.py` `pack_price`, `engine.purchase_cost` | `src/game/configMath.ts` `packPrice`, `src/game/costing.ts` `purchaseCost` (plan Spend only) |
+| Demand/perish maths (help illustrations only) | `core/demand.py`, `people.py`, `ingredients.py`, `weather.py` | `src/game/configMath.ts` |
+| Vocabulary constants (incl. refusal reasons) | `core/defaults.py`, `core/demand.py` | `src/types/game.ts`, `src/utils/format.ts` `REASON_TEXT` |
 
 **Rounding rule:** trim `value*100` to 12 significant digits, round half away from zero,
 `/100`, normalise `-0`. `tests/test_core/test_money.py` fails if the two fixture copies
@@ -149,10 +159,15 @@ diverge (skips if the frontend isn't a sibling checkout).
   `random.Random(f"{seed}:{day}:{purpose}")`. No global `random`
   (`tests/test_core/test_no_global_random.py` scans `app/` for it). The order of RNG draws in
   `run_day` (arrivals → shuffle → one draw per visitor) and the Poisson method are part of
-  replay behaviour — changing them changes every stored game's outcome.
+  replay behaviour — changing them changes every stored game's outcome. The refusal
+  reason reuses the visitor's one draw (`not_popular` when it is under the neutral-popularity
+  chance) and draws nothing; `test_engine.py::test_seeded_replays_are_unchanged` pins a
+  recorded replay.
 - **Idempotency.** Every outbound event carries a per-game monotonic `seq` (the client drops
   stale ones), except `plan_preview`, a request-scoped reply matched by `request_id`. `submit_day` replays return the stored record with `duplicate=True`;
-  `persist_if_finished` is safe to repeat and `resume_game` retries it.
+  `persist_if_finished` is safe to repeat; `resume_game` and `retry_persist` retry it, and
+  a failure is reported as `game_persist_failed`. `create_game` never abandons a finished,
+  unsaved game: it retries the save and refuses with `UNSAVED_GAME` while it fails.
 - **Game formulas belong to the user.** Keep existing formulas; if one looks wrong, flag it
   as an explicit before/after proposal rather than rewriting it inside another change.
 
@@ -163,11 +178,12 @@ diverge (skips if the frontend isn't a sibling checkout).
   out requires `REDIS_ENABLED=true` + `REDIS_URL`. The startup check warns about this.
   (Unlike Beery, Redis-off here means the MySQL `live_games` table, which survives
   restarts, not an in-process dict.)
-- **Stored-game compatibility.** Live docs carry `schema_version` (`SCHEMA_VERSION=1`); a
+- **Stored-game compatibility.** Live docs carry `schema_version` (`SCHEMA_VERSION=2`); a
   mismatch is **deleted on read**, never migrated. `from_payload` re-validates config with
   `GameConfig`, so tightening validation can make in-flight games unloadable. Legacy paths
   (`pack_sizes`, `Batch.unit_cost=None`) exist for old docs — don't remove them without
-  bumping the schema version.
+  bumping the schema version. Day records may hold `cost_per_cup: null` (migration 0004);
+  older stored days keep the list price on no-sale days and the refusal reasons they had.
 - **`GameConfig` error messages are shown verbatim to players** — write them for players.
 - **`state_service.redis_client`** is the backend object even when it is SQL; read it by
   name at call sites.

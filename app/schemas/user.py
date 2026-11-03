@@ -69,9 +69,25 @@ class ConfigDefaultsResponse(BaseModel):
     weather_types: list[str]
     person_types: list[str]
     ingredient_names: list[str]
-    max_num_days: int
+    # Every bound the config and plan screens show or enforce: `core/limits.public_limits()`.
+    limits: dict[str, dict[str, float] | float]
 
 
 class ConfigValidateResponse(BaseModel):
     valid: bool
     message: str | None = None
+
+
+class CupCostRequest(BaseModel):
+    """Day 1 of a game on `config`, with these packs bought and this recipe."""
+
+    config: dict[str, Any]
+    purchases: dict[str, dict[str, int]] = Field(default_factory=dict)
+    recipe: dict[str, int]
+
+
+class CupCostResponse(BaseModel):
+    spend: float
+    cups_possible: int
+    # The plan screen's cost per cup; null when not a single cup can be made.
+    cost_per_cup: float | None

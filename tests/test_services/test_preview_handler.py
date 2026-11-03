@@ -103,7 +103,7 @@ async def test_preview_replies_to_the_asker_only_and_changes_nothing(emits):
         "expected_cups",
         "expected_margin",
         "cups_possible",
-        "best_price",
+        "cost_per_cup",
     }
     assert reply["request_id"] == "r1" and reply["day"] == 1
     engine = gs.engine_of(before)

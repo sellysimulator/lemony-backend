@@ -1,8 +1,8 @@
 """LE-4: `plan_preview`, the expected-value what-if curve for the morning plan.
 
 The expectations below are computed here from the documented formulas
-(`core/demand.py`, `engine.list_cost_per_cup`), never by calling the preview,
-so a slip in the preview's composition shows up as a mismatch.
+(`core/demand.py`, and the cost per cup written out in `reference_cost`), never by
+calling the preview, so a slip in the preview's composition shows up as a mismatch.
 """
 
 from __future__ import annotations
@@ -79,6 +79,30 @@ def reference_cups_possible(game: LemonadeGame, plan: DayPlan) -> int:
     return min(limits)
 
 
+def reference_cost(game: LemonadeGame, plan: DayPlan) -> float | None:
+    """Cost per cup, written out: the cups possible, each ingredient used from held stock
+    oldest first at the price paid, then from today's packs dearest per unit first."""
+    possible = reference_cups_possible(game, plan)
+    if possible == 0:
+        return None
+    total = 0.0
+    for name in ("ice", "sugar", "lemons", "cups"):
+        cfg = game.config.ingredients[name]
+        today = []
+        for size, count in plan.purchases.get(name, {}).items():
+            pack = cfg.pack(int(size))
+            assert pack is not None
+            today.append((int(size) * count, cfg.pack_price(pack) / int(size)))
+        today.sort(key=lambda lot: -lot[1])
+        held = [(b.qty, game.inventory[name].paid(b)) for b in game.inventory[name].batches]
+        need = possible * (1 if name == "cups" else plan.recipe[name])
+        for qty, unit in held + today:
+            take = min(qty, need)
+            total += take * unit
+            need -= take
+    return round_cents(total / possible)
+
+
 def reference(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
     """The spec, written out. Only for the default price range (a grid under 201 prices)."""
     cfg = game.config
@@ -88,7 +112,7 @@ def reference(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
     hours = range(cfg.min_max_values.hour.min, cfg.min_max_values.hour.max + 1)
     prices = grid(game)
     possible = reference_cups_possible(game, plan)
-    cost = game.list_cost_per_cup(plan.recipe)
+    cost = reference_cost(game, plan)
     weights = {
         p.kind: sum(expected_spawn(p, h, weather, temperature, multiplier) for h in hours)
         for p in game.people
@@ -106,8 +130,7 @@ def reference(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
         chance.append(round(buyers / total, 4) if total else 0.0)
         sold = min(buyers, possible)
         cups.append(round(sold, 2))
-        margin.append(round_cents(sold * (price - cost)))
-    best = prices[max(range(len(prices)), key=lambda i: (margin[i], -i))]
+        margin.append(round_cents(sold * (price - cost)) if cost is not None else 0.0)
     return {
         "prices": prices,
         "chance": chance,
@@ -115,7 +138,7 @@ def reference(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
         "expected_cups": cups,
         "expected_margin": margin,
         "cups_possible": possible,
-        "best_price": best,
+        "cost_per_cup": cost,
     }
 
 
@@ -123,7 +146,7 @@ def assert_matches(got: dict[str, Any], want: dict[str, Any]) -> None:
     assert set(got) == set(want)
     assert got["prices"] == want["prices"]
     assert got["cups_possible"] == want["cups_possible"]
-    assert got["best_price"] == want["best_price"]
+    assert got["cost_per_cup"] == want["cost_per_cup"]
     assert got["expected_visitors"] == pytest.approx(want["expected_visitors"], abs=1e-9)
     for key in ("chance", "expected_cups", "expected_margin"):
         assert len(got[key]) == len(want["prices"])
@@ -193,7 +216,6 @@ def test_no_visitors_means_zero_chance_and_cups():
     assert result["expected_visitors"] == 0
     assert result["chance"] == [0.0] * n and result["expected_cups"] == [0.0] * n
     assert result["expected_margin"] == [0.0] * n
-    assert result["best_price"] == result["prices"][0]
 
 
 # --------------------------------------------------------------------- grid
@@ -243,7 +265,6 @@ def test_a_wide_range_widens_the_step_to_a_multiple_of_five_cents(lo, hi, step):
     assert prices[-1] <= hi < round_cents(lo + len(prices) * step)
     for key in ("chance", "expected_cups", "expected_margin"):
         assert len(result[key]) == len(prices)
-    assert result["best_price"] in prices
 
 
 # --------------------------------------------------------------- cups_possible
@@ -303,32 +324,39 @@ def test_stock_caps_the_expected_cups():
     assert result["expected_cups"][0] == 3  # cheapest price sells the most
 
 
-# ----------------------------------------------------------------- best price
-def test_best_price_is_the_grid_price_with_the_highest_listed_margin():
-    result = plan_preview(make_game(), make_plan())
-    margins = result["expected_margin"]
-    index = margins.index(max(margins))
-    assert 0 < index < len(margins) - 1  # an interior peak, so an off-by-one would show
-    assert result["best_price"] == result["prices"][index]
+# --------------------------------------------------------------- cost per cup
+def test_there_is_no_best_price_in_the_reply():
+    assert "best_price" not in plan_preview(make_game(), make_plan())
 
 
-def test_best_price_ties_go_to_the_lower_price():
+def test_cost_per_cup_is_the_stock_cost_with_discounts_and_drives_the_margin():
     game = make_game()
-    result = plan_preview(game, make_plan(purchases={}))  # no stock: every margin is 0
-    assert result["cups_possible"] == 0
-    assert set(result["expected_margin"]) == {0.0}
-    assert result["best_price"] == result["prices"][0]
-
-
-def test_best_price_follows_the_margins_as_sent():
-    # Two cups of stock: the margin grows with the price all the way to the top.
-    plan = make_plan(purchases={"ice": {"100": 1}, "sugar": {"100": 1}, "cups": {"100": 1}})
-    game = make_game()
-    game.inventory["lemons"].add(2)
+    game.inventory["lemons"].add(40, 0.02)  # older lemons, cheaper than any pack today
+    plan = make_plan(
+        purchases={
+            "ice": {"700": 1},
+            "sugar": {"700": 1},
+            "lemons": {"100": 1, "700": 1},
+            "cups": {"100": 1},
+        },
+        recipe={"ice": 1, "sugar": 1, "lemons": 2},
+    )
     result = plan_preview(game, plan)
-    margins = result["expected_margin"]
-    assert result["best_price"] == result["prices"][margins.index(max(margins))]
-    assert result["best_price"] == result["prices"][-1]
+    assert result["cups_possible"] == 100  # the 100 cups
+    # 200 lemons: the 40 old ones, then the dearer 100-pack, then 60 of the 20%-off 700-pack.
+    lemons = 40 * 0.02 + 100 * 0.05 + 60 * 0.04
+    cost = round_cents((100 * 0.008 + 100 * 0.016 + lemons + 100 * 0.04) / 100)
+    assert result["cost_per_cup"] == cost
+    for price, cups, margin in zip(
+        result["prices"], result["expected_cups"], result["expected_margin"], strict=True
+    ):
+        assert margin == pytest.approx(round_cents(cups * (price - cost)), abs=0.011)
+
+
+def test_with_nothing_to_make_a_cup_there_is_no_cost_and_no_margin():
+    result = plan_preview(make_game(), make_plan(purchases={}))
+    assert result["cups_possible"] == 0 and result["cost_per_cup"] is None
+    assert set(result["expected_margin"]) == {0.0}
 
 
 # ------------------------------------------------------------------- refusals

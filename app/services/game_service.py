@@ -100,6 +100,13 @@ def summary_of(document: dict[str, Any]) -> dict[str, Any]:
 
 # --------------------------------------------------------------------- create
 async def create_game(identity: str, config_data: Any, replace: bool = False) -> dict[str, Any]:
+    """Start a new game and make it the identity's active one.
+
+    A finished game that is not saved yet is never left behind: its live copy
+    expires and only `resume_game` / `retry_persist` on the *active* game retry the
+    save. So the save is retried here first, and the new game is refused if it
+    still fails.
+    """
     config = parse_config(config_data)
     async with state_svc.identity_lock(identity):
         active_id = await state_svc.get_active_game_id(identity)
@@ -113,6 +120,12 @@ async def create_game(identity: str, config_data: Any, replace: bool = False) ->
                 )
             if unfinished:
                 await state_svc.delete_game(active_id)
+            elif active is not None and await persist_if_finished(active) is None:
+                raise GameError(
+                    "UNSAVED_GAME",
+                    "Your last game is not saved yet, so a new one can't start. "
+                    "Try again in a moment.",
+                )
         game = LemonadeGame(config, seed=random.SystemRandom().randrange(2**53))
         document: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
@@ -230,7 +243,11 @@ async def bump_seq(document: dict[str, Any]) -> int:
 
 # ------------------------------------------------------------------- persist
 async def persist_if_finished(document: dict[str, Any]) -> str | None:
-    """Write a finished, not-yet-persisted game to MySQL. Safe to call repeatedly."""
+    """Write a finished, not-yet-persisted game to MySQL. Safe to call repeatedly.
+
+    Returns the public id once the game is saved, else None (not finished, or the
+    write failed and the document keeps `persisted: false`).
+    """
     if document["engine"]["phase"] != "finished" or document.get("persisted"):
         return document.get("public_id")
     summary = engine_of(document).summary()

@@ -24,28 +24,33 @@ these, then builds the Docker image; Render deploys only after it passes:
 
 ## Layout
 
-| Path                              | What it does                                                                                                                                                                 |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app/core/`                     | The game engine. It is pure: no I/O, and all randomness is seeded. Files:`defaults`, `config_model`, `limits`, `ingredients`, `people`, `weather`, `demand`, `engine`, `preview` (the morning plan's what-if curve). |
-| `app/services/state_backend.py` | Holds live game state. With`REDIS_ENABLED=false` (the default) it uses the MySQL `live_games` table, so games survive a restart. Only one instance may run in this mode. |
-| `app/services/game_service.py`  | Creates games, submits and acknowledges days, abandons games, and persists them. Every mutation runs under the game lock.                                                    |
-| `app/services/db_service.py`    | Writes a finished game once, as a single idempotent transaction. It also reads games back for the profile.                                                                   |
-| `app/sockets/handlers/`         | `connection` handles the identity handshake. `game` handles the play loop.                                                                                               |
-| `app/api/v1/`                   | `health`, `config` (defaults and validation), `users` (profile, stats, games), `games/claim`.                                                                        |
+| Path                              | What it does                                                                                                                                                                                                                           |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app/core/`                     | The game engine. It is pure: no I/O, and all randomness is seeded. Files:`defaults`, `config_model`, `limits`, `money`, `ingredients`, `people`, `weather`, `demand`, `engine`, `preview` (the morning plan's what-if curve). |
+| `app/services/state_backend.py` | Holds live game state. With`REDIS_ENABLED=false` (the default) it uses the MySQL `live_games` table, so games survive a restart. Only one instance may run in this mode.                                                           |
+| `app/services/game_service.py`  | Creates games, submits and acknowledges days, abandons games, and persists them. Every mutation runs under the game lock. A new game first retries the save of a finished, unsaved one, and is refused (`UNSAVED_GAME`) while that save fails. |
+| `app/services/db_service.py`    | Writes a finished game once, as a single idempotent transaction. It also reads games back for the profile.                                                                                                                             |
+| `app/sockets/handlers/`         | `connection` handles the identity handshake. `game` handles the play loop.                                                                                                                                                         |
+| `app/api/v1/`                   | `health`, `config` (defaults with every limit, validation, and `cup-cost`: the engine's day-1 cost per cup for the config help), `users` (profile, stats, games), `games/claim`. |
 
 ## Socket events
 
-| Client → server                                         | Server → client                                                                            |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `create_game {config, replace?}`                       | `game_created {game_id, session_token}`, then `game_state`                              |
-| `resume_game {game_id?, session_token?}`               | `game_state`, or `no_active_game`                                                       |
-| `submit_day {game_id, day, purchases, price, recipe}`  | `day_result`. On the last day it is followed by `game_finished` and `game_persisted`. |
-| `ack_day {game_id, day}` / `request_state {game_id}` | `game_state`                                                                              |
-| `abandon_game {game_id}`                               | `game_abandoned`                                                                          |
-| `preview_plan {request_id, game_id, day, purchases, recipe}` | `plan_preview {request_id, day, prices, chance, expected_visitors, expected_cups, expected_margin, cups_possible, best_price}`, or `{request_id, day, error}` |
-| any refusal                                              | `error {code, message}`                                                                   |
+| Client → server                                               | Server → client                                                                                                                                                  |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create_game {config, replace?}`                             | `game_created {game_id, session_token}`, then `game_state`                                                                                                    |
+| `resume_game {game_id?, session_token?}`                     | `game_state`, or `no_active_game`                                                                                                                             |
+| `submit_day {game_id, day, purchases, price, recipe}`        | `day_result`. On the last day it is followed by `game_finished`, then `game_persisted` or, if the save failed, `game_persist_failed`.                    |
+| `retry_persist {game_id}`                                    | `game_persisted {public_id}`, or `game_persist_failed`                                                                                                          |
+| `ack_day {game_id, day}` / `request_state {game_id}`       | `game_state`                                                                                                                                                    |
+| `abandon_game {game_id}`                                     | `game_abandoned`                                                                                                                                                |
+| `preview_plan {request_id, game_id, day, purchases, recipe}` | `plan_preview {request_id, day, prices, chance, expected_visitors, expected_cups, expected_margin, cups_possible, cost_per_cup}`, or `{request_id, day, error}` |
+| any refusal                                                    | `error {code, message}`                                                                                                                                         |
 
-`plan_preview` is a request-scoped reply for the morning plan's what-if curve: expected values across the price-input grid, for today's weather and popularity. It is the one event without a `seq`; it changes no state, its refusals come inside the reply, and more than 5 requests per second per sid get no answer.
+`plan_preview` is a request-scoped reply for the morning plan's what-if curve: expected values across the price-input grid, for today's weather and popularity, plus the plan's `cost_per_cup` (the plan screen shows it; the client computes no cost). It is the one event without a `seq`; it changes no state, its refusals come inside the reply, and more than 5 requests per second per sid get no answer.
+
+A finished game is never left behind unsaved. A failed save sends `game_persist_failed`; the client then offers a retry (`retry_persist`) instead of "Play again", and `resume_game` retries too. `create_game` retries the save of a finished, unsaved active game first and refuses with `UNSAVED_GAME` while it still fails.
+
+Every game state carries `limits` (`app/core/limits.public_limits()`), the same object `GET /api/v1/config/defaults` sends: every bound the client shows or enforces, such as the packs of one size a day and the price step. The client copies none.
 
 `submit_day` is idempotent. Re-sending a day that has already been played returns the stored result with `duplicate: true`.
 
@@ -59,12 +64,18 @@ these, then builds the Docker image; Render deploys only after it passes:
   - `quality = mean(ice, sugar, lemons scores)` and `wtp = budget × (1 + quality_swing × (2 × quality − 1))`, where `budget` is `average_expense`.
   - `P(buy) = 1 / (1 + exp((price − wtp) / spread))` with `spread = tolerances.price.above × budget / ln 19`: half of the type buys at `wtp`, 5 % at `wtp + above × budget`.
   - Under `budget × (1 − tolerances.price.below)` a cup looks suspicious and `P(buy)` is scaled by `price ÷ that floor`.
-  - A refusal reads `too_cheap` under that floor. Otherwise it reads `too_pricey` when the price sits further over the budget (in units of `above × budget`) than the worst ingredient sits under a perfect score, or else names that ingredient.
+  - A refusal reads `not_popular` ("Not popular enough") when the visitor's one draw `u` (`buys = u < final P`) is under `P(buy)`: they would have bought at a neutral popularity of 0.5. It only happens while popularity is under 0.5, and it adds no random draw. Otherwise it reads `too_cheap` under that floor, `too_pricey` when the price sits further over the budget (in units of `above × budget`) than the worst ingredient sits under a perfect score, or else names that ingredient. Games stored earlier keep the reasons they were stored with.
 - **Popularity.** A 0–1 value carried across the game, fixed for each day, applied on top of `P(buy)`: `final P = min(1, P(buy) × (0.5 + popularity))`, so 0.5 is neutral, 0 halves every chance and 1 raises it by half.
   - A day's success rate is `cups sold ÷ visitors` (the day's `conversion`); visitors who met a sold-out stand count as not sold.
-  - `popularity = mean(success rate of every played day that had visitors)`; days with no visitors are skipped. Until the first such day it is the config's `starting_popularity` (default 0.5).
+  - `popularity = mean(success rate of every played day that had visitors)`, a plain average where every day counts the same; days with no visitors are skipped. Until the first such day it is the config's `starting_popularity` (default 0.5), which is then dropped: it is not part of the average.
+  - So a day raises popularity exactly when its success rate is above the popularity it was played with (0.5 is not the line). The weather changes the mix of person types that come, and so the success rate of the same plan.
+  - The summary's success rate (`total_buyers ÷ total_visitors`, pooled) and `final_popularity` (the average of daily rates) can differ when days have different numbers of visitors.
   - Each day record carries the `popularity` applied that day; the game state carries the current one, and the summary its `final_popularity`.
-- **Packs.** Each ingredient is sold in packs, and each pack size has its own discount: `pack price = size × unit_cost × (1 − discount)`, rounded to the cent. Every batch remembers the unit price paid, so the day's `cost_per_cup` (ingredients used ÷ cups sold) and `perished_value` reflect discounts.
+- **Packs.** Each ingredient is sold in packs, and each pack size has its own discount: `pack price = size × unit_cost × (1 − discount)`, rounded to the cent. A plan buys 0 to `MAX_PACKS_PER_SIZE` (100) packs of each size a day; anything else, a negative count included, refuses the whole plan. Every batch remembers the unit price paid, so `cost_per_cup` and `perished_value` reflect discounts.
+- **Cost per cup.** One meaning everywhere, computed once (`engine.cup_cost`): the average cost of the cups you can make from your stock. Each ingredient is used in the order cups use it: held stock oldest batch first, at the price paid, then today's packs, one lot per pack size, dearest per unit first (the cheapest stock is kept longest). `plan_preview` sends it for the plan being edited, and the what-if curve's `expected_margin = expected_cups × (price − cost_per_cup)`. The day record's `cost_per_cup` is what the cups sold cost; on a day with no sales, what the cups you could have made would have cost, or null with nothing to make a cup from. Games stored earlier hold the list price on days with no sales.
+- **Day result.** A day's `profit` is `revenue − spend` (today's purchases, even stock used on later days), so the days sum exactly to the final score, `final_cash − starting_cash`. Players see it as "Cash result".
+- **Plans.** Pack counts, recipe amounts and the price are never negative: each must sit inside its range or the plan is refused with a message, never clamped.
 - **Money rounding.** Every money value rounds to whole cents, halves away from zero, after trimming float noise (`app/core/money.py`). The frontend's `src/utils/money.ts` uses the same rule, and both test suites run the same cases in `tests/fixtures/rounding_cases.json` (copied in the frontend repo).
 - **Perishing.** Each purchase batch has a fresh period followed by a linear ramp: `hazard(age) = 0` while `age ≤ fresh_days`, `1` once `age ≥ max_days`, and `(age − fresh)/(max − fresh)` in between. Units are lost binomially at the end of each day.
 - **Weather.** Each day's temperature is drawn uniformly from the configured range. The weather is whichever type's temperature range contains it. The overall range and every weather's range must stay within −30..60 °C (`app/core/limits.py`).
+- **Profile stats.** "Best game" is the highest `total_profit` of any one game and "average profit" the mean over games; games of every length and setting are compared side by side (`services/stats_service.py`).

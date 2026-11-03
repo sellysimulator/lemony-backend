@@ -1,4 +1,8 @@
-"""Per-user aggregates, recomputed from `games` (dialect-agnostic, no MySQL upsert)."""
+"""Per-user aggregates, recomputed from `games` (dialect-agnostic, no MySQL upsert).
+
+`best_profit` is the highest `total_profit` of any one game and `avg_profit` the mean:
+games of every length and setting are compared side by side, as the profile says.
+"""
 
 from __future__ import annotations
 

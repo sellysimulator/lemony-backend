@@ -8,6 +8,14 @@ replays identically no matter when it is run, and nothing touches the global
 Day lifecycle:
     planning --run_day()--> played --acknowledge_day()--> planning (next day)
     the last day's run_day() goes straight to finished.
+
+Cost per cup has one meaning everywhere (``cup_cost``): the average cost of the
+cups you can make from your stock. Each ingredient is used in the order cups use
+it: held stock oldest batch first, at the unit price paid for it, then today's
+purchases, one lot per pack size, dearest per unit first (so the cheapest stock
+is kept longest). The plan preview prices the stock plus the planned packs; the
+day record holds what the cups sold cost, or, on a day with no sales, what the
+cups you could have made would have cost (``None`` with nothing to make a cup).
 """
 
 from __future__ import annotations
@@ -20,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .config_model import GameConfig
 from .defaults import INGREDIENT_NAMES, PERSON_TYPES, RECIPE_INGREDIENTS
 from .demand import (
+    NOT_POPULAR,
     apply_popularity,
     buy_probability,
     expected_spawn,
@@ -28,10 +37,11 @@ from .demand import (
     popularity,
     recipe_quality,
     refusal_reason,
+    refused_for_popularity,
     willingness_to_pay,
 )
 from .ingredients import Ingredient
-from .limits import MAX_PACKS_PER_SIZE
+from .limits import MAX_PACKS_PER_SIZE, public_limits
 from .money import round_cents
 from .people import PersonType, build_people
 from .weather import roll_day_weather
@@ -54,6 +64,33 @@ class DayPlan(BaseModel):
 
 def _money(value: float) -> float:
     return round_cents(value)
+
+
+Lots = dict[str, list[tuple[int, float]]]
+
+
+def cup_cost(stock: Lots, recipe: dict[str, int]) -> tuple[int, float | None]:
+    """(cups you can make, their average cost) from ``stock``.
+
+    ``stock`` lists each ingredient's units in the order cups use them, as
+    ``(units, unit price paid)``. The cost is rounded to the cent; it is ``None``
+    when not a single cup can be made.
+    """
+    per_cup = {**{name: recipe[name] for name in RECIPE_INGREDIENTS}, "cups": 1}
+    held = {name: sum(qty for qty, _ in stock.get(name, [])) for name in per_cup}
+    cups = min(held[name] // amount for name, amount in per_cup.items() if amount > 0)
+    if cups <= 0:
+        return 0, None
+    total = 0.0
+    for name, amount in per_cup.items():
+        remaining = amount * cups
+        for qty, unit_cost in stock.get(name, []):
+            if remaining <= 0:
+                break
+            take = min(qty, remaining)
+            total += take * unit_cost
+            remaining -= take
+    return cups, _money(total / cups)
 
 
 def summarize(
@@ -135,7 +172,11 @@ class LemonadeGame:
                 if pack is None:
                     raise PlanError(f"{name} is not sold in packs of {size}")
                 if not 0 <= count <= MAX_PACKS_PER_SIZE:
-                    raise PlanError(f"Pack count for {name} must be 0-{MAX_PACKS_PER_SIZE}")
+                    # Refused, never clamped: a negative count is no order at all.
+                    raise PlanError(
+                        f"You can buy 0 to {MAX_PACKS_PER_SIZE} packs of {size} {name} a day, "
+                        f"not {count}"
+                    )
                 if count == 0:
                     continue
                 price = cfg.pack_price(pack)
@@ -148,13 +189,26 @@ class LemonadeGame:
             )  # same-day lots: dearest used first, cheapest kept longest
         return _money(cost), units, lots
 
-    def list_cost_per_cup(self, recipe: dict[str, int]) -> float:
-        """A cup priced at undiscounted unit costs."""
-        ing = self.config.ingredients
-        return _money(
-            sum(recipe[name] * ing[name].unit_cost for name in RECIPE_INGREDIENTS)
-            + ing["cups"].unit_cost
-        )
+    def cup_cost(
+        self, recipe: dict[str, int], lots: Lots | None = None
+    ) -> tuple[int, float | None]:
+        """(cups you can make, their average cost) from the stock held plus ``lots`` bought
+        today (``purchase_cost``'s lots, already dearest first). See ``cup_cost``."""
+        stock: Lots = {
+            name: [(b.qty, ing.paid(b)) for b in ing.batches] + list((lots or {}).get(name, []))
+            for name, ing in self.inventory.items()
+        }
+        return cup_cost(stock, recipe)
+
+    def validate_recipe(self, recipe: dict[str, int]) -> None:
+        """Every recipe ingredient set, each inside its config range (never below 0)."""
+        mm = self.config.min_max_values
+        if set(recipe) != set(RECIPE_INGREDIENTS):
+            raise PlanError("Recipe must set ice, sugar and lemons")
+        for name in RECIPE_INGREDIENTS:
+            rng = getattr(mm, name)
+            if not rng.min <= recipe[name] <= rng.max:
+                raise PlanError(f"{name} per cup must be between {rng.min} and {rng.max}")
 
     def _validate_plan(
         self, plan: DayPlan
@@ -162,12 +216,7 @@ class LemonadeGame:
         mm = self.config.min_max_values
         if not mm.price.min <= plan.price <= mm.price.max:
             raise PlanError(f"Price must be between {mm.price.min:.2f} and {mm.price.max:.2f}")
-        if set(plan.recipe) != set(RECIPE_INGREDIENTS):
-            raise PlanError("Recipe must set ice, sugar and lemons")
-        for name in RECIPE_INGREDIENTS:
-            rng = getattr(mm, name)
-            if not rng.min <= plan.recipe[name] <= rng.max:
-                raise PlanError(f"{name} per cup must be between {rng.min} and {rng.max}")
+        self.validate_recipe(plan.recipe)
         cost, units, lots = self.purchase_cost(plan.purchases)
         if cost > self.cash + 1e-9:
             raise PlanError(f"Purchases cost ${cost:.2f} but you only have ${self.cash:.2f}")
@@ -213,18 +262,19 @@ class LemonadeGame:
         reasons: dict[str, int] = {}
         # Recipe, price and popularity are fixed for the day, so each type's view of them is too.
         scores_by_type = {p.kind: ingredient_scores(p, recipe) for p in self.people}
-        probability_by_type = {
-            p.kind: apply_popularity(
-                buy_probability(
-                    p,
-                    price,
-                    willingness_to_pay(
-                        p, recipe_quality(scores_by_type[p.kind]), self.config.quality_swing
-                    ),
+        # The chance at a neutral popularity, then the one applied today.
+        base_by_type = {
+            p.kind: buy_probability(
+                p,
+                price,
+                willingness_to_pay(
+                    p, recipe_quality(scores_by_type[p.kind]), self.config.quality_swing
                 ),
-                pop,
             )
             for p in self.people
+        }
+        probability_by_type = {
+            kind: apply_popularity(base, pop) for kind, base in base_by_type.items()
         }
         revenue = 0.0
         ingredients_used = 0.0
@@ -239,7 +289,8 @@ class LemonadeGame:
             n = len(arrivals)
             for i, person in enumerate(arrivals):
                 probability = probability_by_type[person.kind]
-                wants = rng.random() < probability
+                draw = rng.random()  # the visitor's one draw: it decides and explains
+                wants = draw < probability
                 reason = None
                 if wants and self._can_make_cup(recipe):
                     ingredients_used += self._make_cup(recipe)
@@ -253,7 +304,10 @@ class LemonadeGame:
                     hour_stats["sold_out"] += 1
                 else:
                     outcome = "refused"
-                    reason = refusal_reason(person, price, recipe, scores_by_type[person.kind])
+                    if refused_for_popularity(draw, base_by_type[person.kind]):
+                        reason = NOT_POPULAR
+                    else:
+                        reason = refusal_reason(person, price, recipe, scores_by_type[person.kind])
                     reasons[reason] = reasons.get(reason, 0) + 1
                 by_type[person.kind]["visitors"] += 1
                 events.append(
@@ -269,6 +323,9 @@ class LemonadeGame:
             by_hour.append(hour_stats)
 
         revenue = _money(revenue)
+        buyers = sum(1 for e in events if e["outcome"] == "bought")
+        # With no sales the stock is as it opened: price the cups it could have made.
+        cost_per_cup = _money(ingredients_used / buyers) if buyers else self.cup_cost(recipe)[1]
         perish_rng = self._rng(self.day, "perish")
         losses = {
             name: self.inventory[name].end_of_day_perish(perish_rng) for name in INGREDIENT_NAMES
@@ -278,17 +335,15 @@ class LemonadeGame:
         self.cash = _money(self.cash + revenue)
 
         visitors = len(events)
-        buyers = sum(1 for e in events if e["outcome"] == "bought")
         record = {
             "day": self.day,
             "weather": weather,
             "temperature": temperature,
             "price": price,
             "recipe": recipe,
-            # What the cups sold actually cost (discounts included); list price if none sold.
-            "cost_per_cup": (
-                _money(ingredients_used / buyers) if buyers else self.list_cost_per_cup(recipe)
-            ),
+            # What the cups sold cost, at the price paid; with no sales, what the cups you
+            # could have made would have cost; None with nothing to make a cup from.
+            "cost_per_cup": cost_per_cup,
             "purchased": units,
             "spend": spend,
             "revenue": revenue,
@@ -347,6 +402,8 @@ class LemonadeGame:
             "days": self.days,
             "last_day_events": self.last_day_events,
             "config": self.config.model_dump(),
+            # The bounds the client enforces and shows (packs per size, price step, ...).
+            "limits": public_limits(),
         }
 
     # ----------------------------------------------------------- payload

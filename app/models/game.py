@@ -70,7 +70,9 @@ class GameDay(Base):
     recipe_ice: Mapped[int] = mapped_column(Integer, nullable=False)
     recipe_sugar: Mapped[int] = mapped_column(Integer, nullable=False)
     recipe_lemons: Mapped[int] = mapped_column(Integer, nullable=False)
-    cost_per_cup: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    # What the cups sold cost; on a day with no sales, what the cups you could have made
+    # would have cost; null when there was nothing to make a cup from.
+    cost_per_cup: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     bought_ice: Mapped[int] = mapped_column(Integer, nullable=False)
     bought_sugar: Mapped[int] = mapped_column(Integer, nullable=False)
     bought_lemons: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.defaults import default_config
+from app.core.limits import public_limits
 from app.main import app
 from app.models.live_game import LiveGame
 from app.services import state_service
@@ -231,6 +232,9 @@ def test_config_routes():
     client = TestClient(app)
     defaults = client.get("/api/v1/config/defaults").json()
     assert defaults["person_types"] == ["Child", "Teenager", "Adult", "Senior"]
+    assert defaults["limits"] == public_limits() and "max_num_days" not in defaults
+    assert defaults["limits"]["num_days"] == {"min": 1, "max": 30}
+    assert defaults["limits"]["packs_per_size"] == {"min": 0, "max": 100}
     assert client.post("/api/v1/config/validate", json=defaults["config"]).json() == {
         "valid": True,
         "message": None,
@@ -239,3 +243,48 @@ def test_config_routes():
     res = client.post("/api/v1/config/validate", json=defaults["config"]).json()
     assert not res["valid"] and "gap" in res["message"]
     assert client.get("/api/v1/health").json() == {"status": "ok"}
+
+
+def test_cup_cost_route_gives_the_engines_day_one_figures():
+    client = TestClient(app)
+    recipe = {"ice": 1, "sugar": 1, "lemons": 2}
+    small = {name: {"100": 1} for name in ("ice", "sugar", "lemons", "cups")}
+    body = {"config": default_config(), "purchases": small, "recipe": recipe}
+    res = client.post("/api/v1/config/cup-cost", json=body).json()
+    # 100 lemons make 50 cups at list price: 0.01 + 0.02 + 2 x 0.05 + 0.04.
+    assert res == {"spend": 12.0, "cups_possible": 50, "cost_per_cup": 0.17}
+
+    big = {name: {"700": 2} for name in ("ice", "sugar", "lemons", "cups")}
+    res = client.post("/api/v1/config/cup-cost", json={**body, "purchases": big}).json()
+    assert res["cups_possible"] == 700 and res["cost_per_cup"] == 0.14  # 20% off
+    # 1400 x (0.01 + 0.02 + 0.05 + 0.04) x 0.8: more than the 100 starting cash, still answered.
+    assert res["spend"] == 134.4
+
+    res = client.post("/api/v1/config/cup-cost", json={**body, "purchases": {}}).json()
+    assert res == {"spend": 0.0, "cups_possible": 0, "cost_per_cup": None}
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        ({"purchases": {"lemons": {"100": -1}}}, "You can buy 0 to 100 packs"),
+        ({"purchases": {"lemons": {"7": 1}}}, "not sold in packs of 7"),
+        ({"recipe": {"ice": -1, "sugar": 1, "lemons": 2}}, "ice per cup must be between"),
+        ({"config": {**default_config(), "num_days": 31}}, "num_days"),
+    ],
+)
+def test_cup_cost_route_refuses_bad_input_with_the_games_message(change, message):
+    body = {
+        "config": default_config(),
+        "purchases": {},
+        "recipe": {"ice": 1, "sugar": 1, "lemons": 2},
+    }
+    res = TestClient(app).post("/api/v1/config/cup-cost", json={**body, **change})
+    assert res.status_code == 422 and message in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_the_game_state_carries_the_limits(emits):
+    await connect("s1", {"guestId": new_guest()})
+    await game.create_game("s1", {"config": config()})
+    assert emits.of("game_state")[-1]["state"]["limits"] == public_limits()

@@ -5,10 +5,11 @@
 | create_game {config, replace?}                 | game_created {game_id, session_token} + game_state (full) |
 | resume_game {game_id?, session_token?}         | game_state (full), or no_active_game      |
 | request_state {game_id}                        | game_state (full)                         |
-| submit_day {game_id, day, purchases, price, recipe} | day_result {day, record, events, duplicate, state (daily)} (+ game_finished, game_persisted on the last day) |
+| submit_day {game_id, day, purchases, price, recipe} | day_result {day, record, events, duplicate, state (daily)} (+ game_finished, then game_persisted or game_persist_failed, on the last day) |
 | ack_day {game_id, day}                         | game_state (daily)                        |
+| retry_persist {game_id}                        | game_persisted {public_id}, or game_persist_failed |
 | abandon_game {game_id}                         | game_abandoned                            |
-| preview_plan {request_id, game_id, day, purchases, recipe} | plan_preview {request_id, day, prices, chance, expected_visitors, expected_cups, expected_margin, cups_possible, best_price}, or {request_id, day, error: {code, message}}; no `seq`, changes no state; at most 5 per second per sid, the excess gets no reply |
+| preview_plan {request_id, game_id, day, purchases, recipe} | plan_preview {request_id, day, prices, chance, expected_visitors, expected_cups, expected_margin, cups_possible, cost_per_cup}, or {request_id, day, error: {code, message}}; no `seq`, changes no state; at most 5 per second per sid, the excess gets no reply |
 | (any refusal)                                  | error {code, message}                     |
 
 `game_state` is `{seq, full, state}`. A full state carries the history (`days`,
@@ -20,6 +21,12 @@ last one held) and takes the summary from `game_finished`. Every resync is full.
 Every server event carries a monotonic per-game `seq`, except `plan_preview`, a
 request-scoped reply that is not a state event. `session_token` is sent
 in exactly one event, `game_created`, to the creating sid.
+
+Saving a finished game: `game_persisted` when it is stored, `game_persist_failed`
+when the write failed (the client offers a retry, `retry_persist`; `resume_game`
+retries too). `create_game` retries the save of a finished, unsaved active game
+first and refuses with `UNSAVED_GAME` if it still fails, so no finished game is
+left behind unsaved.
 """
 
 from __future__ import annotations
@@ -63,17 +70,24 @@ async def _send_state(sid: str, document: dict[str, Any], full: bool = True) -> 
     )
 
 
+async def _persist(sid: str, document: dict[str, Any]) -> None:
+    """Save a finished game and say how it went: `game_persisted` or `game_persist_failed`."""
+    public_id = await gs.persist_if_finished(document)
+    seq = await gs.bump_seq(document)
+    if public_id:
+        await socket_manager.emit_to_sid(
+            sid, "game_persisted", {"seq": seq, "public_id": public_id}
+        )
+    else:
+        await socket_manager.emit_to_sid(sid, "game_persist_failed", {"seq": seq})
+
+
 async def _finish(sid: str, document: dict[str, Any]) -> None:
     seq = await gs.bump_seq(document)
     await socket_manager.emit_to_sid(
         sid, "game_finished", {"seq": seq, "summary": gs.summary_of(document)}
     )
-    public_id = await gs.persist_if_finished(document)
-    if public_id:
-        seq = await gs.bump_seq(document)
-        await socket_manager.emit_to_sid(
-            sid, "game_persisted", {"seq": seq, "public_id": public_id}
-        )
+    await _persist(sid, document)
 
 
 def _payload(data: Any) -> dict[str, Any]:
@@ -180,6 +194,23 @@ async def ack_day(sid: str, data: Any = None) -> None:
         await _error(sid, exc.code, exc.message)
         return
     await _send_state(sid, document, full=False)
+
+
+@sio.event
+@guarded()
+async def retry_persist(sid: str, data: Any = None) -> None:
+    """Retry saving a finished game whose save failed (or answer that it is saved)."""
+    identity = _identity(sid)
+    if identity is None:
+        return
+    try:
+        document = await gs.require_owned(identity, _payload(data).get("game_id"))
+        if document["engine"]["phase"] != "finished":
+            raise gs.GameError("NOT_FINISHED", "This game is not finished yet.")
+    except gs.GameError as exc:
+        await _error(sid, exc.code, exc.message)
+        return
+    await _persist(sid, document)
 
 
 @sio.event
