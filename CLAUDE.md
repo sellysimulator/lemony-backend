@@ -69,6 +69,18 @@ else from the template needs the user's explicit OK.
   logged and returns `None`, never raising into the game. Every field of the day record is
   stored, and `engine.summarize()` builds both the live summary and the stored one;
   `tests/test_services/test_persistence.py` checks that the two match.
+- **Player stats never cost a save.** `user_stats` is a cache of the player's games.
+  `persist_finished_game` commits the game first; only then does
+  `stats_service.refresh_user_stats` recompute the stats, in a session of its own (also
+  when the game was already stored: a retry, or the `IntegrityError` of another writer
+  that stored it first). A stats failure is logged (user id and game public id) and the
+  public id is still returned, so `game_persisted` is still sent. `POST /games/claim` also
+  commits the claim before it recomputes. `recompute_user_stats` rebuilds every figure from
+  all the player's games, and `GET /users/me/stats` (`current_user_stats`) recomputes before
+  answering when the stored `games_played` is not the count of the player's games. Games
+  are only ever added to a player (save, claim), so that count is the staleness check:
+  no timestamps (MySQL `DATETIME` keeps whole seconds) and no migration.
+  Tests: `tests/test_services/test_stats.py`.
 - **`app/core/limits.py` holds every hard limit**, apart from `config_model` so code that
   needs only a limit doesn't import the whole config. Every player-supplied number has an
   upper bound there; `tests/test_core/test_limits.py` sets each one far out of range
@@ -168,6 +180,15 @@ exception: when the backend stops sending a field the live frontend reads (as wh
 events dropped the history, or states dropped `last_day_events` and a duplicate
 `day_result` got `events: null`), ship the frontend first, or an open tab on the old frontend
 crashes until it is reloaded.
+
+**The `fix/charts` release breaks that exception: deploy the backend first, then the
+frontend right after it.** The branch as a whole can't go frontend first: its new frontend
+needs what its earlier backend commits add (`POST /config/preview` and the other new
+server figures, plus migrations 0004 and 0005, which the backend's `preDeployCommand`
+applies). Keep the gap short. Until the new frontend is live, an open tab on the old one
+can crash on a duplicate `day_result` (`events: null`) or on a resume of a played,
+unacknowledged day (no `last_day_events`), until it is reloaded. After this release the
+general rule applies again.
 
 | What | Backend | Frontend |
 |---|---|---|

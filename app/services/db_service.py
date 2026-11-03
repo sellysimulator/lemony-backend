@@ -7,6 +7,11 @@ rows each go in one executemany). It is synchronous — call it through
 MySQL. It never raises: on failure it logs and returns None, and the live
 document keeps `persisted: false`.
 
+The player's stats are not part of that transaction. Once the game is committed they
+are recomputed in a session of their own (`stats_service.refresh_user_stats`); a
+failure there is logged and changes nothing about the save (the public id is still
+returned, so `game_persisted` is still sent), and reading the stats repairs them.
+
 Every field of a day record is stored, so `load_game_detail` rebuilds the live
 summary exactly through the same builder (`engine.summarize`).
 """
@@ -27,7 +32,7 @@ from app.core.money import round_cents
 from ..core.defaults import INGREDIENT_NAMES, PERSON_TYPES
 from ..core.engine import success_rate, summarize
 from ..models.game import Game, GameConfigRow, GameDay, GameDayHour, GameDayType
-from .stats_service import recompute_user_stats
+from .stats_service import refresh_user_stats
 from .user_service import UserService
 
 logger = logging.getLogger(__name__)
@@ -99,6 +104,10 @@ def _day_row(game_id: int, d: dict[str, Any]) -> dict[str, Any]:
 
 
 def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any]) -> Game:
+    """Insert the finished game (or return the stored copy); the caller commits.
+
+    Writes the game only: the player's stats are recomputed after the commit.
+    """
     public_id = document["game_id"]
     existing = db.execute(select(Game).where(Game.public_id == public_id)).scalar_one_or_none()
     if existing is not None:
@@ -160,35 +169,49 @@ def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any])
         if hours:
             db.execute(insert(_GAME_DAY_HOURS), hours)
     db.flush()
-    if user_id is not None:
-        recompute_user_stats(db, user_id)
     return game
 
 
-def persist_finished_game(document: dict[str, Any], summary: dict[str, Any]) -> str | None:
+def _save_game(document: dict[str, Any], summary: dict[str, Any]) -> tuple[str, int | None] | None:
+    """Commit the game in its own transaction: (public id, owner's user id), or None."""
     from ..db import session as db_session
 
     db = db_session.SessionLocal()
     try:
         game = persist_game(db, document, summary)
+        saved = (game.public_id, game.user_id)  # read before the commit expires them
         db.commit()
-        return game.public_id
+        return saved
     except IntegrityError:
         # Another writer stored the same game first: that copy is the result.
         db.rollback()
         try:
-            return db.execute(
-                select(Game.public_id).where(Game.public_id == document["game_id"])
-            ).scalar_one_or_none()
+            row = db.execute(
+                select(Game.public_id, Game.user_id).where(Game.public_id == document["game_id"])
+            ).one_or_none()
         except Exception:
             logger.exception("Failed to persist finished game.")
             return None
+        return (row.public_id, row.user_id) if row is not None else None
     except Exception:
         db.rollback()
         logger.exception("Failed to persist finished game.")
         return None
     finally:
         db.close()
+
+
+def persist_finished_game(document: dict[str, Any], summary: dict[str, Any]) -> str | None:
+    saved = _save_game(document, summary)
+    if saved is None:
+        return None
+    public_id, user_id = saved
+    # Only now, with the game committed: a stats failure is logged and leaves the save
+    # as it is. Also run when the game was already stored (a retry, or another writer
+    # first), since that writer's recompute may not have happened.
+    if user_id is not None:
+        refresh_user_stats(user_id, public_id)
+    return public_id
 
 
 def _f(value: Decimal | None) -> float | None:

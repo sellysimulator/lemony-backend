@@ -4,8 +4,11 @@ retry it, and a new game is refused while the last one is still unsaved."""
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 
-from app.services import db_service
+from app.db.session import SessionLocal
+from app.models.game import Game, UserStats
+from app.services import db_service, stats_service
 from app.services import game_service as gs
 from app.services.state_service import state_svc
 from app.sockets.handlers import game
@@ -112,6 +115,30 @@ async def test_retry_is_refused_for_an_unfinished_game_or_someone_elses(emits):
     await game.retry_persist("s2", {"game_id": game_id})
     assert emits.of("error")[-1]["code"] == "NO_GAME"
     assert not emits.of("game_persisted") and not emits.of("game_persist_failed")
+
+
+@pytest.mark.asyncio
+async def test_a_stats_failure_never_fails_the_save(emits, firebase_tokens, monkeypatch):
+    def broken(db: Any, user_id: int) -> None:
+        raise RuntimeError("stats are broken")
+
+    monkeypatch.setattr(stats_service, "recompute_user_stats", broken)
+    firebase_tokens["tok"] = {"uid": "uid-save"}
+    await connect("s1", {"idToken": "tok"})
+    await game.create_game("s1", {"config": config(1)})
+    game_id = emits.of("game_created")[-1]["game_id"]
+    await game.submit_day("s1", {"game_id": game_id, "day": 1, **PLAN})
+
+    assert emits.of("game_persisted")[-1]["public_id"] == game_id
+    assert not emits.of("game_persist_failed")
+    stored = await state_svc.get_game(game_id)
+    assert stored is not None and stored["persisted"] and stored["public_id"] == game_id
+    with SessionLocal() as db:  # saved, and the stats really did fail
+        saved = db.execute(select(Game).where(Game.public_id == game_id)).scalar_one()
+        assert saved.user_id is not None and db.get(UserStats, saved.user_id) is None
+    # So "Play again" is open: the next game starts.
+    await game.create_game("s1", {"config": config(2)})
+    assert not emits.of("error") and len(emits.of("game_created")) == 2
 
 
 @pytest.mark.asyncio
