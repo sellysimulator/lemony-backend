@@ -26,6 +26,8 @@ class UserStatsResponse(BaseModel):
     days_played: int = 0
     total_cups_sold: int = 0
     total_visitors: int = 0
+    # All cups sold over all visitors; null with no visitors.
+    conversion: float | None = None
     total_profit: float = 0.0
     best_profit: float | None = None
     avg_profit: float | None = None
@@ -45,6 +47,8 @@ class GameListItem(BaseModel):
     total_buyers: int
     total_sold_out: int
     final_popularity: float | None = None
+    # Cups sold over visitors; null with no visitors.
+    conversion: float | None = None
     started_at: str
     finished_at: str
 
@@ -76,6 +80,21 @@ class ConfigDefaultsResponse(BaseModel):
 class ConfigValidateResponse(BaseModel):
     valid: bool
     message: str | None = None
+
+
+class ConfigPreviewResponse(BaseModel):
+    """`POST /config/preview`: the verdict and every figure the config screen and help show.
+
+    `ingredients` holds each ingredient's own figures (`core/config_preview.ingredient_preview`),
+    or null when that ingredient's settings are invalid, so the packs and spoilage keep
+    their figures while another part of the config is being fixed. `help` (the figures of
+    `config_preview.config_help`) needs the whole config to be valid, else it is null.
+    """
+
+    valid: bool
+    message: str | None = None
+    ingredients: dict[str, dict[str, Any] | None]
+    help: dict[str, Any] | None = None
 
 
 class CupCostRequest(BaseModel):

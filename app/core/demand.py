@@ -55,10 +55,19 @@ def triangle_kernel(current: float, preferred: float, denominator: float) -> flo
     return min(1.0, max(0.0, 1 - abs(current - preferred) / denominator))
 
 
+def temperature_score(person: PersonType, temperature: float) -> float:
+    """How much this type likes the day's temperature (0-1); its range sets the reach."""
+    return triangle_kernel(temperature, person.preferred_degrees, person.denominators.temperature)
+
+
+def hour_score(person: PersonType, hour: int) -> float:
+    """How much this type likes being out at ``hour`` (0-1); the opening hours set the reach."""
+    return triangle_kernel(hour, person.preferred_hour, person.denominators.hour)
+
+
 def spawn_bonus(person: PersonType, hour: int, weather: str, temperature: float) -> float:
-    d = person.denominators
-    temp_s = triangle_kernel(temperature, person.preferred_degrees, d.temperature)
-    hour_s = triangle_kernel(hour, person.preferred_hour, d.hour)
+    temp_s = temperature_score(person, temperature)
+    hour_s = hour_score(person, hour)
     weather_s = 1.0 if weather == person.preferred_weather else 0.0
     return statistics.mean([weather_s, hour_s, temp_s])
 
@@ -90,12 +99,16 @@ def asymmetric_kernel(current: float, preferred: float, below: float, above: flo
     return triangle_kernel(current, preferred, below if current < preferred else above)
 
 
+def ingredient_score(person: PersonType, name: str, amount: float) -> float:
+    """How much this type likes ``amount`` of one recipe ingredient (0-1), from its tolerances."""
+    below, above = getattr(person.tolerances, name)
+    return asymmetric_kernel(amount, getattr(person, f"preferred_{name}"), below, above)
+
+
 def ingredient_scores(person: PersonType, recipe: dict[str, int]) -> dict[str, float]:
-    t = person.tolerances
+    # Ice, sugar, lemons, in that order: refusal_reason breaks a tie on the first.
     return {
-        "ice": asymmetric_kernel(recipe["ice"], person.preferred_ice, *t.ice),
-        "sugar": asymmetric_kernel(recipe["sugar"], person.preferred_sugar, *t.sugar),
-        "lemons": asymmetric_kernel(recipe["lemons"], person.preferred_lemons, *t.lemons),
+        name: ingredient_score(person, name, recipe[name]) for name in ("ice", "sugar", "lemons")
     }
 
 
@@ -103,8 +116,13 @@ def recipe_quality(scores: dict[str, float]) -> float:
     return statistics.mean(scores.values())
 
 
+def wtp_share(quality: float, quality_swing: float) -> float:
+    """What a cup of ``quality`` is worth to a customer, as a share of their budget."""
+    return 1 + quality_swing * (2 * quality - 1)
+
+
 def willingness_to_pay(person: PersonType, quality: float, quality_swing: float) -> float:
-    return person.average_expense * (1 + quality_swing * (2 * quality - 1))
+    return person.average_expense * wtp_share(quality, quality_swing)
 
 
 def cheap_floor(person: PersonType) -> float:
@@ -130,9 +148,18 @@ def popularity(rates: list[float], start: float) -> float:
     return statistics.mean(rates) if rates else start
 
 
+# The popularity at which buy chances are left as price and recipe make them.
+NEUTRAL_POPULARITY = 0.5
+
+
+def popularity_factor(popularity: float) -> float:
+    """What every buy chance is multiplied by: ``0.5 + popularity`` (1 at NEUTRAL_POPULARITY)."""
+    return 0.5 + popularity
+
+
 def apply_popularity(probability: float, popularity: float) -> float:
-    """Scale a buy chance by ``0.5 + popularity``: neutral at 0.5, capped at 1."""
-    return min(1.0, probability * (0.5 + popularity))
+    """Scale a buy chance by ``popularity_factor``: neutral at 0.5, capped at 1."""
+    return min(1.0, probability * popularity_factor(popularity))
 
 
 NOT_POPULAR = "not_popular"

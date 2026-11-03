@@ -56,7 +56,8 @@ else from the template needs the user's explicit OK.
 ## Architecture in one pass
 
 - **`app/core/` engine modules are pure** (`engine`, `demand`, `people`, `weather`,
-  `ingredients`, `defaults`, `config_model`, `money`, `limits`, `preview`): stdlib + pydantic only, no settings,
+  `ingredients`, `defaults`, `config_model`, `money`, `limits`, `preview`, `config_preview`,
+  `plans`): stdlib + pydantic only, no settings,
   services, DB or I/O. `core/firebase.py` and `core/checks/` are *not* pure (they read
   settings) — the "pure" rule applies to the engine modules, not the package.
 - **`LemonadeGame`** (`core/engine.py`) is rebuilt from its JSON payload on every service
@@ -74,22 +75,46 @@ else from the template needs the user's explicit OK.
   (±1e12, ±inf, NaN) and expects a refusal, and checks each served bound is the one
   enforced. `public_limits()` is what the client reads (`GET /config/defaults` `limits`
   and every game state's `limits`): the frontend hand-copies no bound.
+- **The server computes every figure the client shows; the client copies no formula.**
+  Each figure comes from the function the engine itself uses (never a second
+  implementation), and a new one goes in an existing payload or a server function next
+  to the engine's:
+  - Plan screen: `plan_preview` (spend, cash after, units, `can_add` per pack, cost and
+    margin per cup, the price verdict, the curve) and the state's `packs`,
+    `popularity_factor`, `suggested_plan`.
+  - Records: `engine.day_view` (cash at the start, popularity factor, success rate per
+    type and hour, refusals per hour, cups the opening stock made) is derived on the way
+    out and never stored; `summarize` adds the game's success rate, spoilage value,
+    traffic per hour and neutral popularity. Events carry the running sales and stock.
+  - Config screen and help: `POST /config/preview` (`core/config_preview.py`).
+  The frontend's `noClientFormulas` test fails if one of the removed copies comes back.
 - **Cost per cup has one meaning, computed once:** `engine.cup_cost` — the average cost of
   the cups the stock can make (held stock oldest first at the price paid, then today's
   packs dearest per unit first). The preview sends it, the day record keeps it (what the
   cups sold cost; with no sales, what the cups you could have made would have cost, or
-  null), and `POST /config/cup-cost` gives the help its day-1 examples. The client
-  computes none.
+  null), and `POST /config/preview` gives the help its day-1 examples
+  (`POST /config/cup-cost` stays for older clients). The client computes none.
+- **`core/config_preview.py`** answers `POST /config/preview` (called, debounced, on every
+  config edit): `ingredient_preview` (packs via `ingredients.pack_offers`, spoilage via
+  `Ingredient.hazard`) needs only that ingredient's settings, so it is answered even
+  while the rest is invalid; `config_help` (weather odds via `weather.weather_odds`,
+  the demand curves, worked examples, cost-per-cup examples via `purchase_cost` /
+  `cup_cost`, example plans from `plans.py`) needs the whole config. It picks its own
+  x-axes (`grids`). `tests/fixtures/config_preview.json` is its reply for the defaults.
 - **History goes out only in full states.** `game_state` is `{seq, full, state}`: full on
   create, resume and `request_state`, daily (no `days`, `last_day_events` or `summary`)
   after `ack_day` and inside `day_result`. The client appends `day_result.record` to the
   days it holds. Details in the `game.py` docstring.
-- **`core/preview.py` `plan_preview(game, plan)`** feeds the morning plan's what-if curve:
-  expected chance, visitors, cups and margin across the price-input grid, plus the plan's
-  `cups_possible` and `cost_per_cup`, built from the `demand.py` functions `run_day` uses
-  and `engine.cup_cost`, with no RNG beyond today's weather. There is no best price. The
+- **`core/preview.py` `plan_preview(game, plan, price)`** feeds the morning plan: expected
+  chance, visitors, cups and margin across the price-input grid, the plan's
+  `cups_possible` and `cost_per_cup`, `spend`, `cash_after`, `units` and `can_add`, and
+  for the player's `price` the verdict (`price_error`, from `validate_price`) and the
+  curve at exactly that price (`at_price`, with the margin per cup). Built from the
+  `demand.py` functions `run_day` uses, `engine.cup_cost`, `purchase_cost`, `affordable`
+  and `cash_after`, with no RNG beyond today's weather. There is no best price. The
   `preview_plan` handler answers with `plan_preview` (no `seq`, no lock, no save, refusals
-  inside the reply) and drops more than `PREVIEW_LIMIT` (5) requests per second per sid.
+  inside the reply; a bad price is a `price_error`, not a refusal) and drops more than
+  `PREVIEW_LIMIT` (5) requests per second per sid.
 - **`services/state_service.py` + `state_backend.py`**: keys `game:<id>`, `active:<identity>`,
   locks `lock:game:<id>` / `lock:active:<identity>`, TTL `GAME_TTL_SECONDS`.
 - **Auto-discovery everywhere.** A new REST router (module exporting `router` in
@@ -127,21 +152,21 @@ crashes until it is reloaded.
 | What | Backend | Frontend |
 |---|---|---|
 | Socket events & payloads (incl. `retry_persist` → `game_persisted` / `game_persist_failed`) | `app/sockets/handlers/game.py` (+ `connection.py` handshake) | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts` |
-| Plan preview (`preview_plan` → `plan_preview`, incl. `cost_per_cup`) | `app/core/preview.py`, `app/sockets/handlers/game.py` | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts`, `src/components/plan/` |
+| Plan preview (`preview_plan` with `price` → `plan_preview`: curve, cost/margin per cup, spend, cash after, units, `can_add`, `price_error`, `at_price`) | `app/core/preview.py`, `app/sockets/handlers/game.py` | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts`, `src/components/plan/` |
+| Config preview (`POST /config/preview`: verdict, `ingredients`, `help`) | `app/core/config_preview.py`, `plans.py`, `weather.weather_odds`, `ingredients.pack_offers`, `app/api/v1/config.py` | `src/api/rest.ts`, `src/types/game.ts` (`ConfigPreview`), `pages/ConfigPage.tsx`, `components/config/PacksEditor.tsx`, `components/config/docs/` |
+| Config preview fixture | `tests/fixtures/config_preview.json` (= its reply for the defaults) | `src/__tests__/fixtures/config_preview.json` (byte-identical) |
+| Derived record and summary figures (`day_view`, `summarize`, event `sales`/`stock`/`cups_left`, state `packs`/`popularity_factor`/`suggested_plan`, profile `conversion`) | `app/core/engine.py`, `app/services/db_service.py`, `app/api/v1/users.py` | `src/types/game.ts`; shown only: `PlanDay`, `DayReport`, `GameOver`, `charts/endgame/`, `day/Hud`, `day/InventoryPanel`, `ProfilePage` |
 | Limits (every bound, the price step) | `core/limits.py` `public_limits()` → `/config/defaults` `limits` and game state `limits` | `src/types/game.ts` `Limits`; read by `ConfigPage`, `PacksEditor`, `PlanDay`, the help |
 | Limits fixture | `tests/fixtures/limits.json` (= `public_limits()`) | `src/__tests__/fixtures/limits.json` (byte-identical) |
-| Cost per cup | `engine.cup_cost` (preview, day record, `POST /config/cup-cost`) | shown only: `PlanDay`, `DayReport`, help `CupCostExample` |
+| Cost per cup | `engine.cup_cost` (preview, day record, config preview's `cup_cost`) | shown only: `PlanDay`, `DayReport`, the help |
 | REST shapes | `app/schemas/user.py`, `app/api/v1/*` | `src/api/rest.ts` |
 | Engine output shapes (`view()`, day record, `summary()`) | `app/core/engine.py` | `src/types/game.ts` (hand-written, no codegen) |
-| Money rounding | `app/core/money.py` `round_cents` | `src/utils/money.ts` `roundCents` |
-| Rounding fixture | `tests/fixtures/rounding_cases.json` | `src/__tests__/fixtures/rounding_cases.json` (byte-identical) |
-| Pack price, purchase cost | `core/config_model.py` `pack_price`, `engine.purchase_cost` | `src/game/configMath.ts` `packPrice`, `src/game/costing.ts` `purchaseCost` (plan Spend only) |
-| Demand/perish maths (help illustrations only) | `core/demand.py`, `people.py`, `ingredients.py`, `weather.py` | `src/game/configMath.ts` |
 | Vocabulary constants (incl. refusal reasons) | `core/defaults.py`, `core/demand.py` | `src/types/game.ts`, `src/utils/format.ts` `REASON_TEXT` |
 
-**Rounding rule:** trim `value*100` to 12 significant digits, round half away from zero,
-`/100`, normalise `-0`. `tests/test_core/test_money.py` fails if the two fixture copies
-diverge (skips if the frontend isn't a sibling checkout).
+**Rounding rule:** only the server rounds money (`core/money.py` `round_cents`: trim
+`value*100` to 12 significant digits, round half away from zero, `/100`, normalise `-0`).
+Every money figure it sends is already rounded; the client's `money()` only prints two
+decimals.
 
 ## Invariants
 
@@ -162,7 +187,9 @@ diverge (skips if the frontend isn't a sibling checkout).
   replay behaviour — changing them changes every stored game's outcome. The refusal
   reason reuses the visitor's one draw (`not_popular` when it is under the neutral-popularity
   chance) and draws nothing; `test_engine.py::test_seeded_replays_are_unchanged` pins a
-  recorded replay.
+  recorded replay. Figures added for the client (event `sales`/`stock`/`cups_left`,
+  `inventory_open`, the views) read the engine's state and draw nothing;
+  `weather.roll_day_weather` is `day_temperature` + `weathers_at` with the same two draws.
 - **Idempotency.** Every outbound event carries a per-game monotonic `seq` (the client drops
   stale ones), except `plan_preview`, a request-scoped reply matched by `request_id`. `submit_day` replays return the stored record with `duplicate=True`;
   `persist_if_finished` is safe to repeat; `resume_game` and `retry_persist` retry it, and
@@ -184,6 +211,12 @@ diverge (skips if the frontend isn't a sibling checkout).
   (`pack_sizes`, `Batch.unit_cost=None`) exist for old docs — don't remove them without
   bumping the schema version. Day records may hold `cost_per_cup: null` (migration 0004);
   older stored days keep the list price on no-sale days and the refusal reasons they had.
+  `inventory_open` (migration 0005) is absent on days played before it, and so are the
+  events' `sales`/`stock`/`cups_left`: the client then hides the playback's stock panel.
+- **Day views are never stored.** `summarize` returns `day_view`s, so persistence writes
+  only the record's own fields (`_day_row`, `_TYPE_FIELDS`, `_HOUR_FIELDS`, all explicit)
+  and `load_game_detail` derives the views again; `test_persistence` checks the stored
+  summary equals the live one.
 - **`GameConfig` error messages are shown verbatim to players** — write them for players.
 - **`state_service.redis_client`** is the backend object even when it is SQL; read it by
   name at call sites.

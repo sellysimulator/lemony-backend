@@ -77,6 +77,12 @@ class GameDay(Base):
     bought_sugar: Mapped[int] = mapped_column(Integer, nullable=False)
     bought_lemons: Mapped[int] = mapped_column(Integer, nullable=False)
     bought_cups: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Stock when the stand opened, the day's packs included; null for games finished
+    # before it was stored.
+    inventory_open_ice: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inventory_open_sugar: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inventory_open_lemons: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inventory_open_cups: Mapped[int | None] = mapped_column(Integer, nullable=True)
     spend: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     revenue: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     profit: Mapped[Decimal] = mapped_column(MONEY, nullable=False)

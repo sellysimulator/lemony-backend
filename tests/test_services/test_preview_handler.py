@@ -104,6 +104,10 @@ async def test_preview_replies_to_the_asker_only_and_changes_nothing(emits):
         "expected_margin",
         "cups_possible",
         "cost_per_cup",
+        "spend",
+        "cash_after",
+        "units",
+        "can_add",
     }
     assert reply["request_id"] == "r1" and reply["day"] == 1
     engine = gs.engine_of(before)
@@ -111,6 +115,49 @@ async def test_preview_replies_to_the_asker_only_and_changes_nothing(emits):
     plan = DayPlan(purchases=PURCHASES, recipe=RECIPE, price=price_min)
     assert reply == {"request_id": "r1", "day": 1, **plan_preview(engine, plan)}
     assert await state_service.state_svc.get_game(game_id) == before  # seq included
+
+
+@pytest.mark.asyncio
+async def test_a_price_is_judged_and_priced_inside_the_reply(emits):
+    sid, _, game_id = await start(emits)
+    document = await state_service.state_svc.get_game(game_id)
+    assert document is not None
+    engine = gs.engine_of(document)
+    emits.events.clear()
+
+    await preview_plan(sid, request(game_id, price=0.55))
+
+    reply = previews(emits)[0]
+    plan = DayPlan(purchases=PURCHASES, recipe=RECIPE, price=0.55)
+    assert reply == {"request_id": "r1", "day": 1, **plan_preview(engine, plan, 0.55)}
+    assert reply["price"] == 0.55 and reply["price_error"] is None
+    assert reply["at_price"]["margin_per_cup"] == round(0.55 - reply["cost_per_cup"], 2)
+
+
+@pytest.mark.asyncio
+async def test_a_price_out_of_range_is_not_a_refusal_but_carries_submit_days_message(emits):
+    sid, _, game_id = await start(emits)
+    emits.events.clear()
+
+    await preview_plan(sid, request(game_id, price=5))
+
+    reply = previews(emits)[0]
+    assert "error" not in reply and reply["prices"]
+    assert reply["at_price"] is None
+    refused = await submit_error(emits, sid, request(game_id, price=5))
+    assert refused == {"code": "INVALID_PLAN", "message": reply["price_error"]}
+
+
+@pytest.mark.asyncio
+async def test_a_price_that_is_not_a_number_refuses_like_submit_day(emits):
+    sid, _, game_id = await start(emits)
+    emits.events.clear()
+
+    await preview_plan(sid, request(game_id, price="cheap"))
+
+    reply = previews(emits)[0]
+    assert reply["error"]["code"] == "INVALID_PLAN" and "price" in reply["error"]["message"]
+    assert reply["error"] == await submit_error(emits, sid, request(game_id, price="cheap"))
 
 
 @pytest.mark.asyncio

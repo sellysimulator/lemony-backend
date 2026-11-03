@@ -15,14 +15,21 @@ functions ``run_day`` uses:
 the stock plus the planned packs make, and their average cost (the one meaning of
 cost per cup, see ``engine``). When stock binds, ``expected_cups`` is an upper bound
 on the simulated mean.
+
+The plan's own figures come from the engine's checks too: ``spend`` and ``units`` from
+``purchase_cost``, ``cash_after`` from ``cash_after``, and ``can_add`` says, per pack,
+whether one more passes ``purchase_cost`` (the packs-per-size limit) and ``affordable``.
+Given the player's ``price``, ``validate_price`` judges it (``price_error``) and
+``at_price`` holds the curve's figures at exactly that price, with the margin per cup.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Any
 
-from .defaults import RECIPE_INGREDIENTS
+from .defaults import INGREDIENT_NAMES, RECIPE_INGREDIENTS
 from .demand import (
     apply_popularity,
     buy_probability,
@@ -31,7 +38,7 @@ from .demand import (
     recipe_quality,
     willingness_to_pay,
 )
-from .engine import DayPlan, LemonadeGame
+from .engine import DayPlan, LemonadeGame, PlanError
 from .limits import PRICE_STEP
 from .money import round_cents
 
@@ -54,9 +61,35 @@ def _price_grid(low: float, high: float) -> list[float]:
     return [p for p in prices if p <= high + _EPS]
 
 
-def plan_preview(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
-    """Expected visitors, chance, cups and margin across the price grid. Raises ``PlanError``."""
-    _, _, lots = game._validate_plan(plan)
+def _can_add(
+    game: LemonadeGame, purchases: dict[str, dict[str, int]]
+) -> dict[str, dict[str, bool]]:
+    """Per ingredient and pack size: whether the plan with one more of that pack still passes
+    the engine's purchase rules and fits the cash."""
+    counts: dict[str, dict[int, int]] = {name: {} for name in INGREDIENT_NAMES}
+    for name, packs in purchases.items():
+        for size, count in packs.items():
+            counts[name][int(size)] = counts[name].get(int(size), 0) + count
+    out: dict[str, dict[str, bool]] = {}
+    for name in INGREDIENT_NAMES:
+        out[name] = {}
+        for pack in game.config.ingredients[name].packs:
+            more = {n: {str(s): c for s, c in sizes.items()} for n, sizes in counts.items()}
+            more[name][str(pack.size)] = counts[name].get(pack.size, 0) + 1
+            try:
+                cost, _, _ = game.purchase_cost(more)
+            except PlanError:
+                out[name][str(pack.size)] = False
+            else:
+                out[name][str(pack.size)] = game.affordable(cost)
+    return out
+
+
+def plan_preview(game: LemonadeGame, plan: DayPlan, price: float | None = None) -> dict[str, Any]:
+    """Expected visitors, chance, cups and margin across the price grid, and the plan's own
+    figures. ``plan.price`` is ignored; ``price``, when given, is judged and priced.
+    Raises ``PlanError`` for a recipe or purchases ``run_day`` would refuse."""
+    spend, units, lots = game.validate_purchases(plan)
     recipe = {name: int(plan.recipe[name]) for name in RECIPE_INGREDIENTS}
     config = game.config
     mm = config.min_max_values
@@ -80,28 +113,66 @@ def plan_preview(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
     ]
 
     cups_possible, cost_per_cup = game.cup_cost(recipe, lots)
-    prices = _price_grid(mm.price.min, mm.price.max)
-    chance: list[float] = []
-    expected_cups: list[float] = []
-    expected_margin: list[float] = []
-    for price in prices:
+
+    def point(at: float) -> tuple[float, float, float]:
+        """(chance, expected cups, expected margin) at the price ``at``."""
         buyers = sum(
-            weight * apply_popularity(buy_probability(person, price, wtp_i), popularity)
+            weight * apply_popularity(buy_probability(person, at, wtp_i), popularity)
             for person, weight, wtp_i in zip(game.people, weights, wtp, strict=True)
         )
         cups = min(buyers, float(cups_possible))
-        chance.append(round(buyers / total_weight, 4) if total_weight > 0 else 0.0)
-        expected_cups.append(round(cups, 2))
+        chance = round(buyers / total_weight, 4) if total_weight > 0 else 0.0
         # No cup can be made without a cost, so no stock means no margin.
-        margin = cups * (price - cost_per_cup) if cost_per_cup is not None else 0.0
-        expected_margin.append(round_cents(margin))
+        margin = cups * (at - cost_per_cup) if cost_per_cup is not None else 0.0
+        return chance, round(cups, 2), round_cents(margin)
 
-    return {
+    prices = _price_grid(mm.price.min, mm.price.max)
+    points = [point(p) for p in prices]
+    result: dict[str, Any] = {
         "prices": prices,
-        "chance": chance,
+        "chance": [c for c, _, _ in points],
         "expected_visitors": round(total_weight, 2),
-        "expected_cups": expected_cups,
-        "expected_margin": expected_margin,
+        "expected_cups": [cups for _, cups, _ in points],
+        "expected_margin": [m for _, _, m in points],
         "cups_possible": cups_possible,
         "cost_per_cup": cost_per_cup,
+        "spend": spend,
+        "cash_after": game.cash_after(spend),
+        "units": units,
+        "can_add": _can_add(game, plan.purchases),
+    }
+    if price is not None:
+        result.update(_at_price(game, price, cost_per_cup, point))
+    return result
+
+
+Point = Callable[[float], tuple[float, float, float]]
+
+
+def _at_price(
+    game: LemonadeGame, price: float, cost_per_cup: float | None, point: Point
+) -> dict[str, Any]:
+    """The player's price judged as ``run_day`` judges it, and the curve at exactly it."""
+    try:
+        game.validate_price(price)
+    except PlanError as exc:
+        return {"price": None, "price_error": str(exc), "at_price": None}
+    charged = round_cents(price)  # what run_day charges
+    chance, cups, margin = point(charged)
+    per_cup = None if cost_per_cup is None else round_cents(charged - cost_per_cup)
+    return {
+        "price": charged,
+        "price_error": None,
+        "at_price": {
+            "chance": chance,
+            "expected_cups": cups,
+            "expected_margin": margin,
+            # Price less cost per cup, and the share of the price it keeps.
+            "margin_per_cup": per_cup,
+            "margin_share": (
+                round((charged - cost_per_cup) / charged, 4)
+                if cost_per_cup is not None and charged > 0
+                else None
+            ),
+        },
     }

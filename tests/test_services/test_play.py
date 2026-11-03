@@ -1,9 +1,13 @@
+import json
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.defaults import default_config
+from app.core.config_model import GameConfig
+from app.core.config_preview import config_help, ingredient_preview
+from app.core.defaults import INGREDIENT_NAMES, default_config
 from app.core.limits import public_limits
 from app.main import app
 from app.models.live_game import LiveGame
@@ -215,8 +219,11 @@ async def test_signed_in_game_reaches_profile_and_guest_claim(emits, firebase_to
     )
     listing = client.get("/api/v1/users/me/games", headers=auth).json()
     assert listing["total"] == 2
+    for item in listing["items"]:
+        assert item["conversion"] == round(item["total_buyers"] / item["total_visitors"], 4)
     stats = client.get("/api/v1/users/me/stats", headers=auth).json()
     assert stats["games_played"] == 2
+    assert stats["conversion"] == round(stats["total_cups_sold"] / stats["total_visitors"], 4)
     detail = client.get(f"/api/v1/users/me/games/{gid}", headers=auth).json()
     assert detail["days"][0]["by_hour"] and detail["config"]["num_days"] == 1
     day = detail["days"][0]
@@ -243,6 +250,67 @@ def test_config_routes():
     res = client.post("/api/v1/config/validate", json=defaults["config"]).json()
     assert not res["valid"] and "gap" in res["message"]
     assert client.get("/api/v1/health").json() == {"status": "ok"}
+
+
+def test_config_preview_route_gives_the_verdict_and_every_figure():
+    client = TestClient(app)
+    data = default_config()
+    res = client.post("/api/v1/config/preview", json=data).json()
+    assert res["valid"] is True and res["message"] is None
+    parsed = GameConfig.model_validate(data)
+    assert res["help"] == config_help(parsed)
+    assert res["ingredients"] == {
+        name: ingredient_preview(name, parsed.ingredients[name]) for name in INGREDIENT_NAMES
+    }
+
+
+def test_an_invalid_config_keeps_each_valid_ingredients_figures_and_no_help():
+    client = TestClient(app)
+    data = default_config()
+    data["weather_temperature_ranges"]["rainy"]["min"] = 8  # a gap
+    data["ingredients"]["sugar"]["fresh_days"] = 20  # not under its max days
+    res = client.post("/api/v1/config/preview", json=data).json()
+    verdict = client.post("/api/v1/config/validate", json=data).json()
+    assert res["valid"] is False and res["message"] == verdict["message"]
+    assert res["help"] is None
+    assert res["ingredients"]["sugar"] is None
+    lemons = GameConfig.model_validate(default_config()).ingredients["lemons"]
+    assert res["ingredients"]["lemons"] == ingredient_preview("lemons", lemons)
+
+
+@pytest.mark.parametrize("body", [{}, {"ingredients": 5}, {"ingredients": {"ice": "cold"}}])
+def test_config_preview_route_answers_any_object(body):
+    res = TestClient(app).post("/api/v1/config/preview", json=body)
+    assert res.status_code == 200
+    assert res.json()["valid"] is False
+    assert res.json()["ingredients"] == {name: None for name in INGREDIENT_NAMES}
+
+
+# The frontend's tests render the help from this recorded reply: it must be what the server
+# answers today. Regenerate it from the defaults when a figure deliberately changes.
+PREVIEW_FIXTURE = Path(__file__).parent.parent / "fixtures" / "config_preview.json"
+PREVIEW_FRONTEND_COPY = (
+    Path(__file__).parents[3]
+    / "Lemony_Frontend"
+    / "src"
+    / "__tests__"
+    / "fixtures"
+    / "config_preview.json"
+)
+
+
+def test_the_config_preview_fixture_is_what_the_server_answers():
+    recorded = json.loads(PREVIEW_FIXTURE.read_text())
+    assert recorded["config"] == default_config()
+    res = TestClient(app).post("/api/v1/config/preview", json=recorded["config"]).json()
+    assert res == recorded["reply"]
+
+
+@pytest.mark.skipif(
+    not PREVIEW_FRONTEND_COPY.exists(), reason="frontend repo not checked out next to the backend"
+)
+def test_the_config_preview_fixture_matches_the_frontend_copy():
+    assert PREVIEW_FRONTEND_COPY.read_bytes() == PREVIEW_FIXTURE.read_bytes()
 
 
 def test_cup_cost_route_gives_the_engines_day_one_figures():

@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.money import round_cents
 
 from ..core.defaults import INGREDIENT_NAMES, PERSON_TYPES
-from ..core.engine import summarize
+from ..core.engine import success_rate, summarize
 from ..models.game import Game, GameConfigRow, GameDay, GameDayHour, GameDayType
 from .stats_service import recompute_user_stats
 from .user_service import UserService
@@ -57,8 +57,13 @@ def is_guest(identity: str) -> bool:
     return identity.startswith("guest_")
 
 
+_TYPE_FIELDS = ("visitors", "buyers", "sold_out")
+_HOUR_FIELDS = ("hour", "visitors", "buyers", "sold_out")
+
+
 def _day_row(game_id: int, d: dict[str, Any]) -> dict[str, Any]:
     inventory_end = d.get("inventory_end") or {}
+    inventory_open = d.get("inventory_open") or {}
     return {
         "game_id": game_id,
         "day": d["day"],
@@ -73,6 +78,7 @@ def _day_row(game_id: int, d: dict[str, Any]) -> dict[str, Any]:
         "bought_sugar": d["purchased"]["sugar"],
         "bought_lemons": d["purchased"]["lemons"],
         "bought_cups": d["purchased"]["cups"],
+        **{f"inventory_open_{name}": inventory_open.get(name) for name in INGREDIENT_NAMES},
         "spend": _money(d["spend"]),
         "revenue": _money(d["revenue"]),
         "profit": _money(d["profit"]),
@@ -128,18 +134,29 @@ def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any])
     db.add(game)
     db.flush()
     db.add(GameConfigRow(game_id=game.id, config=document["engine"]["config"]))
+    # The summary's days are views: only the record's own fields are stored, and the
+    # figures derived from them are derived again on load (engine.day_view).
     days = summary["days"]
     if days:
         db.execute(insert(_GAME_DAYS), [_day_row(game.id, d) for d in days])
         db.execute(
             insert(_GAME_DAY_TYPES),
             [
-                {"game_id": game.id, "day": d["day"], "person_type": kind, **d["by_type"][kind]}
+                {
+                    "game_id": game.id,
+                    "day": d["day"],
+                    "person_type": kind,
+                    **{key: d["by_type"][kind][key] for key in _TYPE_FIELDS},
+                }
                 for d in days
                 for kind in PERSON_TYPES
             ],
         )
-        hours = [{"game_id": game.id, "day": d["day"], **h} for d in days for h in d["by_hour"]]
+        hours = [
+            {"game_id": game.id, "day": d["day"], **{key: h[key] for key in _HOUR_FIELDS}}
+            for d in days
+            for h in d["by_hour"]
+        ]
         if hours:
             db.execute(insert(_GAME_DAY_HOURS), hours)
     db.flush()
@@ -192,6 +209,7 @@ def game_row_summary(game: Game) -> dict[str, Any]:
         "total_buyers": game.total_buyers,
         "total_sold_out": game.total_sold_out,
         "final_popularity": _f(game.final_popularity),
+        "conversion": success_rate(game.total_buyers, game.total_visitors),
         "started_at": game.started_at.isoformat(),
         "finished_at": game.finished_at.isoformat(),
     }
@@ -248,6 +266,9 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
         inventory_end = {name: getattr(d, f"inventory_end_{name}") for name in INGREDIENT_NAMES}
         if None not in inventory_end.values():  # absent on games stored before it was kept
             day["inventory_end"] = inventory_end
+        inventory_open = {name: getattr(d, f"inventory_open_{name}") for name in INGREDIENT_NAMES}
+        if None not in inventory_open.values():  # absent on games stored before it was kept
+            day["inventory_open"] = inventory_open
         days.append(day)
     detail = summarize(
         num_days=game.num_days,

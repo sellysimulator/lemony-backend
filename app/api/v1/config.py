@@ -1,9 +1,18 @@
-"""Default game configuration, the limits, and server-side checks for the config screen."""
+"""Default game configuration, the limits, and server-side checks for the config screen.
+
+`POST /config/preview` is what the config screen calls (debounced) on every edit: the
+verdict of `/config/validate` plus every figure the screen and its help show for the
+draft (`core/config_preview.py`). `/config/validate` and `/config/cup-cost` stay for
+clients from before it.
+"""
 
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import ValidationError
 
+from ...core.config_model import IngredientConfig
+from ...core.config_preview import config_help, ingredient_preview
 from ...core.defaults import (
     INGREDIENT_NAMES,
     PERSON_TYPES,
@@ -14,6 +23,7 @@ from ...core.engine import LemonadeGame, PlanError
 from ...core.limits import public_limits
 from ...schemas.user import (
     ConfigDefaultsResponse,
+    ConfigPreviewResponse,
     ConfigValidateResponse,
     CupCostRequest,
     CupCostResponse,
@@ -42,6 +52,42 @@ def validate_config(config: dict[str, Any]) -> ConfigValidateResponse:
     except GameError as exc:
         return ConfigValidateResponse(valid=False, message=exc.message)
     return ConfigValidateResponse(valid=True)
+
+
+def _ingredients_alone(config: dict[str, Any]) -> dict[str, dict[str, Any] | None]:
+    """Each ingredient's figures from its own settings, for a config that fails as a whole."""
+    raw = config.get("ingredients")
+    out: dict[str, dict[str, Any] | None] = {}
+    for name in INGREDIENT_NAMES:
+        try:
+            cfg = IngredientConfig.model_validate(raw.get(name) if isinstance(raw, dict) else None)
+        except ValidationError:
+            out[name] = None
+        else:
+            out[name] = ingredient_preview(name, cfg)
+    return out
+
+
+@router.post("/preview", response_model=ConfigPreviewResponse)
+def preview_config(config: dict[str, Any]) -> ConfigPreviewResponse:
+    """The verdict on a draft config and every figure the config screen and help show.
+
+    Always 200: an invalid draft answers `valid: false` with the player-facing reason,
+    the figures of each ingredient that is valid on its own, and no `help`.
+    """
+    try:
+        parsed = parse_config(config)
+    except GameError as exc:
+        return ConfigPreviewResponse(
+            valid=False, message=exc.message, ingredients=_ingredients_alone(config)
+        )
+    return ConfigPreviewResponse(
+        valid=True,
+        ingredients={
+            name: ingredient_preview(name, parsed.ingredients[name]) for name in INGREDIENT_NAMES
+        },
+        help=config_help(parsed),
+    )
 
 
 @router.post("/cup-cost", response_model=CupCostResponse)

@@ -192,7 +192,7 @@ async def submit_day(
             raise GameError("INVALID_PLAN", "day must be a number")
         if engine.phase != "planning" or day != engine.day:
             if engine.days and engine.days[-1]["day"] == day and engine.phase != "planning":
-                stored = {"record": engine.days[-1], "events": engine.last_day_events}
+                stored = {"record": engine.day_records()[-1], "events": engine.last_day_events}
                 return document, stored, True
             raise GameError("WRONG_DAY", f"It is day {engine.day}, not day {day}.")
         try:

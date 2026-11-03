@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ...core.engine import success_rate
 from ...db.session import get_db
 from ...models.game import Game, UserStats
 from ...schemas.user import (
@@ -89,6 +90,7 @@ def get_my_stats(
         days_played=stats.days_played,
         total_cups_sold=stats.total_cups_sold,
         total_visitors=stats.total_visitors,
+        conversion=success_rate(stats.total_cups_sold, stats.total_visitors),
         total_profit=float(stats.total_profit),
         best_profit=float(stats.best_profit) if stats.best_profit is not None else None,
         avg_profit=float(stats.avg_profit) if stats.avg_profit is not None else None,

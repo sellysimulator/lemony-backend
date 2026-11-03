@@ -103,6 +103,32 @@ def reference_cost(game: LemonadeGame, plan: DayPlan) -> float | None:
     return round_cents(total / possible)
 
 
+def reference_spend(game: LemonadeGame, purchases: dict[str, dict[str, int]]) -> float:
+    """What the packs cost, written out: each pack's price rounded to the cent, then the sum."""
+    total = 0.0
+    for name, packs in purchases.items():
+        cfg = game.config.ingredients[name]
+        for size, count in packs.items():
+            pack = cfg.pack(int(size))
+            assert pack is not None
+            total += round_cents(int(size) * cfg.unit_cost * (1 - pack.discount)) * count
+    return round_cents(total)
+
+
+def reference_can_add(game: LemonadeGame, plan: DayPlan) -> dict[str, dict[str, bool]]:
+    """One more pack fits when it keeps the size under the daily cap and the cash covers it."""
+    out: dict[str, dict[str, bool]] = {}
+    for name in ("ice", "sugar", "lemons", "cups"):
+        out[name] = {}
+        for pack in game.config.ingredients[name].packs:
+            have = plan.purchases.get(name, {}).get(str(pack.size), 0)
+            more = copy.deepcopy(plan.purchases)
+            more.setdefault(name, {})[str(pack.size)] = have + 1
+            fits = reference_spend(game, more) <= game.cash + 1e-9
+            out[name][str(pack.size)] = have + 1 <= 100 and fits
+    return out
+
+
 def reference(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
     """The spec, written out. Only for the default price range (a grid under 201 prices)."""
     cfg = game.config
@@ -131,6 +157,8 @@ def reference(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
         sold = min(buyers, possible)
         cups.append(round(sold, 2))
         margin.append(round_cents(sold * (price - cost)) if cost is not None else 0.0)
+    spend = reference_spend(game, plan.purchases)
+    bought = units_bought(plan.purchases)
     return {
         "prices": prices,
         "chance": chance,
@@ -139,6 +167,10 @@ def reference(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
         "expected_margin": margin,
         "cups_possible": possible,
         "cost_per_cup": cost,
+        "spend": spend,
+        "cash_after": round_cents(game.cash - spend),
+        "units": {n: bought.get(n, 0) for n in ("ice", "sugar", "lemons", "cups")},
+        "can_add": reference_can_add(game, plan),
     }
 
 
@@ -147,6 +179,8 @@ def assert_matches(got: dict[str, Any], want: dict[str, Any]) -> None:
     assert got["prices"] == want["prices"]
     assert got["cups_possible"] == want["cups_possible"]
     assert got["cost_per_cup"] == want["cost_per_cup"]
+    for key in ("spend", "cash_after", "units", "can_add"):
+        assert got[key] == want[key], key
     assert got["expected_visitors"] == pytest.approx(want["expected_visitors"], abs=1e-9)
     for key in ("chance", "expected_cups", "expected_margin"):
         assert len(got[key]) == len(want["prices"])
@@ -357,6 +391,105 @@ def test_with_nothing_to_make_a_cup_there_is_no_cost_and_no_margin():
     result = plan_preview(make_game(), make_plan(purchases={}))
     assert result["cups_possible"] == 0 and result["cost_per_cup"] is None
     assert set(result["expected_margin"]) == {0.0}
+
+
+# ------------------------------------------------- the plan's own figures
+def test_spend_and_units_are_what_run_day_charges_and_adds():
+    game = make_game()
+    plan = make_plan(purchases={"lemons": {"300": 2, "100": 1}, "cups": {"700": 1}})
+    preview = plan_preview(game, plan)
+    record = make_game().run_day(plan)["record"]
+    assert preview["spend"] == record["spend"]
+    assert preview["units"] == record["purchased"]
+    assert preview["cash_after"] == round_cents(game.cash - record["spend"])
+
+
+def test_can_add_stops_at_the_daily_cap_per_size():
+    game = make_game()
+    game.cash = 10_000.0
+    preview = plan_preview(game, make_plan(purchases={"ice": {"100": 99}}))
+    assert preview["can_add"]["ice"]["100"] is True
+    preview = plan_preview(game, make_plan(purchases={"ice": {"100": 100}}))
+    assert preview["can_add"]["ice"]["100"] is False
+    assert preview["can_add"]["ice"]["300"] is True  # another size has its own cap
+
+
+def test_can_add_stops_where_the_cash_runs_out():
+    game = make_game()
+    game.cash = 6.0  # 100 cups cost 4.00, 100 lemons 5.00
+    preview = plan_preview(game, make_plan(purchases={"cups": {"100": 1}}))
+    assert preview["cash_after"] == 2.0
+    assert preview["can_add"]["cups"]["100"] is False  # 8.00 > 6.00
+    assert preview["can_add"]["sugar"]["100"] is True  # 4.00 + 2.00 fits exactly
+    assert preview["can_add"]["lemons"]["100"] is False
+    # Exactly what submit_day would accept or refuse.
+    for name, size in (("sugar", "100"), ("lemons", "100")):
+        plan = make_plan(purchases={"cups": {"100": 1}, name: {size: 1}})
+        try:
+            game._validate_plan(plan)
+            accepted = True
+        except PlanError:
+            accepted = False
+        assert accepted is preview["can_add"][name][size]
+
+
+# ------------------------------------------------- the player's price
+def test_without_a_price_there_is_no_verdict_and_no_point():
+    preview = plan_preview(make_game(), make_plan())
+    assert not {"price", "price_error", "at_price"} & set(preview)
+
+
+@pytest.mark.parametrize("price", [0.2, 0.55, 1.0])
+def test_at_a_grid_price_the_point_is_the_curve(price):
+    game = make_game()
+    preview = plan_preview(game, make_plan(), price)
+    i = preview["prices"].index(price)
+    point = preview["at_price"]
+    assert preview["price"] == price and preview["price_error"] is None
+    assert point["chance"] == preview["chance"][i]
+    assert point["expected_cups"] == preview["expected_cups"][i]
+    assert point["expected_margin"] == preview["expected_margin"][i]
+    cost = preview["cost_per_cup"]
+    assert point["margin_per_cup"] == round_cents(price - cost)
+    assert point["margin_share"] == round((price - cost) / price, 4)
+
+
+def test_an_off_grid_price_is_rounded_as_run_day_charges_it():
+    game = make_game()
+    preview = plan_preview(game, make_plan(), 0.4349)
+    assert preview["price"] == 0.43
+    want = plan_preview(game, make_plan(), 0.43)["at_price"]
+    assert preview["at_price"] == want
+    record = make_game().run_day(make_plan(price=0.4349))["record"]
+    assert record["price"] == preview["price"]
+
+
+@pytest.mark.parametrize("price", [0.19, 1.01, -1.0, float("nan"), float("inf")])
+def test_a_price_out_of_range_gets_run_days_message_and_no_point(price):
+    game = make_game()
+    preview = plan_preview(game, make_plan(), price)
+    with pytest.raises(PlanError) as refused:
+        game._validate_plan(make_plan(price=price))
+    assert preview["price_error"] == str(refused.value) == "Price must be between 0.20 and 1.00"
+    assert preview["at_price"] is None and preview["price"] is None
+    assert preview["prices"]  # the curve is still there
+
+
+def test_with_nothing_to_make_a_cup_the_price_has_no_margin_per_cup():
+    preview = plan_preview(make_game(), make_plan(purchases={}), 0.5)
+    assert preview["at_price"]["margin_per_cup"] is None
+    assert preview["at_price"]["margin_share"] is None
+
+
+def test_a_free_cup_has_a_margin_but_no_share_of_the_price():
+    def edit(data: dict[str, Any]) -> None:
+        data["min_max_values"]["price"]["min"] = 0.0
+        for p in data["people_preferences"].values():
+            p["average_expense"] = max(p["average_expense"], 0.0)
+
+    preview = plan_preview(make_game(edit=edit), make_plan(), 0.0)
+    assert preview["at_price"]["margin_per_cup"] == -preview["cost_per_cup"]
+    assert preview["at_price"]["margin_share"] is None
 
 
 # ------------------------------------------------------------------- refusals
