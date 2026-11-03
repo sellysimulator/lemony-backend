@@ -70,11 +70,19 @@ class GameDay(Base):
     recipe_ice: Mapped[int] = mapped_column(Integer, nullable=False)
     recipe_sugar: Mapped[int] = mapped_column(Integer, nullable=False)
     recipe_lemons: Mapped[int] = mapped_column(Integer, nullable=False)
-    cost_per_cup: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    # What the cups sold cost; on a day with no sales, what the cups you could have made
+    # would have cost; null when there was nothing to make a cup from.
+    cost_per_cup: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     bought_ice: Mapped[int] = mapped_column(Integer, nullable=False)
     bought_sugar: Mapped[int] = mapped_column(Integer, nullable=False)
     bought_lemons: Mapped[int] = mapped_column(Integer, nullable=False)
     bought_cups: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Stock when the stand opened, the day's packs included; null for games finished
+    # before it was stored.
+    inventory_open_ice: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inventory_open_sugar: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inventory_open_lemons: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inventory_open_cups: Mapped[int | None] = mapped_column(Integer, nullable=True)
     spend: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     revenue: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     profit: Mapped[Decimal] = mapped_column(MONEY, nullable=False)

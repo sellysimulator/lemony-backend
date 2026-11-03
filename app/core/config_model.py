@@ -5,13 +5,25 @@ and person types: those dictionaries must carry exactly the fixed keys.
 Cross-field rules (a preference must lie inside its range, weather temperature
 ranges must cover the whole temperature range, ...) raise ``ValueError`` with a
 sentence the configuration screen shows verbatim.
+
+The last rule caps the busiest day: ``demand.max_expected_customers`` must not exceed
+``MAX_CUSTOMERS_PER_DAY``. It applies when a config is created or changed
+(``model_validate``), never when a stored game is read back (``validate_uncapped``), so
+a game made before the cap, or with a config it now refuses, still loads and plays.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from .defaults import (
     INGREDIENT_NAMES,
@@ -21,6 +33,7 @@ from .defaults import (
 )
 from .limits import (
     MAX_AVERAGE_EXPENSE,
+    MAX_CUSTOMERS_PER_DAY,
     MAX_FRESH_DAYS,
     MAX_HOUR,
     MAX_MAX_DAYS,
@@ -31,12 +44,17 @@ from .limits import (
     MAX_PER_CUP,
     MAX_PRICE,
     MAX_PRICE_TOLERANCE_ABOVE,
+    MAX_SHARE,
     MAX_SPAWN_PER_HOUR,
     MAX_STARTING_CASH,
     MAX_TEMPERATURE,
     MAX_TOLERANCE,
     MAX_UNIT_COST,
     MAX_WEATHER_MULTIPLIER,
+    MIN_MAX_DAYS,
+    MIN_NUM_DAYS,
+    MIN_PACK_SIZE,
+    MIN_PACKS,
     MIN_TEMPERATURE,
 )
 from .money import round_cents
@@ -115,8 +133,11 @@ class Tolerances(_Strict):
 
     @model_validator(mode="after")
     def _price_shares(self) -> Tolerances:
-        if self.price.below > 1:
-            raise ValueError("price tolerance below must be a share of the budget, 0-1 (0-100%)")
+        if self.price.below > MAX_SHARE:
+            raise ValueError(
+                f"price tolerance below must be a share of the budget, 0-{MAX_SHARE} "
+                f"(0-{MAX_SHARE:.0%})"
+            )
         if not 0 < self.price.above <= MAX_PRICE_TOLERANCE_ABOVE:
             raise ValueError(
                 "price tolerance above must be above 0 and at most "
@@ -145,8 +166,10 @@ class PackOption(_Strict):
 
     @model_validator(mode="after")
     def _bounds(self) -> PackOption:
-        if not 1 <= self.size <= MAX_PACK_SIZE:
-            raise ValueError(f"pack sizes must be between 1 and {MAX_PACK_SIZE} units")
+        if not MIN_PACK_SIZE <= self.size <= MAX_PACK_SIZE:
+            raise ValueError(
+                f"pack sizes must be between {MIN_PACK_SIZE} and {MAX_PACK_SIZE} units"
+            )
         if not 0 <= self.discount <= MAX_PACK_DISCOUNT:
             raise ValueError(f"pack discounts must be between 0% and {MAX_PACK_DISCOUNT:.0%}")
         return self
@@ -154,9 +177,9 @@ class PackOption(_Strict):
 
 class IngredientConfig(_Strict):
     unit_cost: float = Field(ge=0, le=MAX_UNIT_COST)
-    packs: list[PackOption] = Field(min_length=1, max_length=MAX_PACKS)
+    packs: list[PackOption] = Field(min_length=MIN_PACKS, max_length=MAX_PACKS)
     fresh_days: int = Field(ge=0, le=MAX_FRESH_DAYS)
-    max_days: int = Field(ge=1, le=MAX_MAX_DAYS)
+    max_days: int = Field(ge=MIN_MAX_DAYS, le=MAX_MAX_DAYS)
     never_perishes: bool = False
 
     @model_validator(mode="before")
@@ -197,6 +220,10 @@ class IngredientConfig(_Strict):
         return self
 
 
+# The validation context key that turns the customers-per-day cap off (``validate_uncapped``).
+_CUSTOMERS_CAP = "customers_cap"
+
+
 def _exact_keys(value: dict, expected: tuple[str, ...], what: str) -> dict:
     if set(value) != set(expected):
         raise ValueError(f"{what} must have exactly these keys: {', '.join(expected)}")
@@ -204,15 +231,15 @@ def _exact_keys(value: dict, expected: tuple[str, ...], what: str) -> dict:
 
 
 class GameConfig(_Strict):
-    num_days: int = Field(ge=1, le=MAX_NUM_DAYS)
+    num_days: int = Field(ge=MIN_NUM_DAYS, le=MAX_NUM_DAYS)
     starting_cash: float = Field(ge=0, le=MAX_STARTING_CASH)
     min_max_values: MinMaxValues
     # How much the recipe moves what customers will pay: a perfect cup raises it to
     # budget x (1 + quality_swing), a cup they hate lowers it to budget x (1 - quality_swing).
-    quality_swing: float = Field(ge=0, le=1)
+    quality_swing: float = Field(ge=0, le=MAX_SHARE)
     # Popularity before the first day with visitors. Each buy chance is scaled by
     # (0.5 + popularity), so 0.5 is neutral. Defaulted so configs saved before it still load.
-    starting_popularity: float = Field(default=0.5, ge=0, le=1)
+    starting_popularity: float = Field(default=0.5, ge=0, le=MAX_SHARE)
     people_preferences: dict[str, PersonPreferences]
     weather_multipliers: dict[str, float]
     weather_temperature_ranges: dict[str, FloatRange]
@@ -251,8 +278,19 @@ class GameConfig(_Strict):
     def _ingredient_keys(cls, value: dict) -> dict:
         return _exact_keys(value, INGREDIENT_NAMES, "ingredients")
 
+    @classmethod
+    def validate_uncapped(cls, data: Any) -> GameConfig:
+        """Every rule but the cap on customers a day.
+
+        For a stored game's config, which was accepted when the game was created: the cap
+        applies only when a config is created or changed, so a game made before it, or
+        with a config it now refuses, still loads and plays. The config preview uses it
+        too, to show the figure of a config the cap refuses.
+        """
+        return cls.model_validate(data, context={_CUSTOMERS_CAP: False})
+
     @model_validator(mode="after")
-    def _cross_field(self) -> GameConfig:
+    def _cross_field(self, info: ValidationInfo) -> GameConfig:
         mm = self.min_max_values
         for ptype, prefs in self.people_preferences.items():
             for name in RECIPE_INGREDIENTS:
@@ -278,7 +316,26 @@ class GameConfig(_Strict):
                     f"price range {mm.price.min}-{mm.price.max}"
                 )
         self._check_weather_coverage()
+        if (info.context or {}).get(_CUSTOMERS_CAP, True):
+            self._check_customers_per_day()
         return self
+
+    def _check_customers_per_day(self) -> None:
+        """The busiest day this config allows must stay within MAX_CUSTOMERS_PER_DAY.
+
+        Refused, never scaled down: the player changes the numbers that drive it.
+        """
+        # Imported here: demand builds on this module (through people and weather).
+        from .demand import max_expected_customers
+
+        expected = max_expected_customers(self)
+        if expected > MAX_CUSTOMERS_PER_DAY:
+            raise ValueError(
+                f"Up to {expected:,} customers could come on the busiest day, over the "
+                f"limit of {MAX_CUSTOMERS_PER_DAY:,} a day. Lower the base visitors per "
+                "hour of the customer types, shorten the opening hours or lower the "
+                "weather traffic multipliers."
+            )
 
     def _check_weather_coverage(self) -> None:
         """The weather ranges, together, must cover the temperature range with no gap."""

@@ -23,6 +23,41 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config_model import IngredientConfig
+from .money import round_cents
+
+# A per-unit price this much under another counts as cheaper: 8.55 / 300 and 2.85 / 100
+# differ only in float noise.
+_PRICE_NOISE = 1e-9
+
+
+def pack_offers(cfg: IngredientConfig) -> list[dict[str, Any]]:
+    """Every pack on sale, smallest first, priced exactly as a purchase is.
+
+    ``price`` is ``IngredientConfig.pack_price``; ``unit_price`` what one unit of it costs;
+    ``saving`` what the discount takes off the list price; ``dearer_than`` the size of a
+    smaller pack that is cheaper per unit (the deepest discount among them), or None.
+    """
+    priced = [(pack, cfg.pack_price(pack)) for pack in cfg.packs]
+    offers = []
+    for pack, price in priced:
+        unit = price / pack.size
+        cheaper = [
+            other
+            for other, other_price in priced
+            if other.size < pack.size and other_price / other.size < unit - _PRICE_NOISE
+        ]
+        best = max(cheaper, key=lambda other: other.discount, default=None)
+        offers.append(
+            {
+                "size": pack.size,
+                "discount": pack.discount,
+                "price": price,
+                "unit_price": round(unit, 6),
+                "saving": round_cents(pack.size * cfg.unit_cost - price),
+                "dearer_than": best.size if best is not None else None,
+            }
+        )
+    return offers
 
 
 @dataclass
@@ -62,6 +97,13 @@ class Ingredient:
         if age >= self.max_days:
             return 1.0
         return (age - self.fresh_days) / (self.max_days - self.fresh_days)
+
+    def survival(self, age: int) -> float:
+        """Expected share of a batch still good after ``age`` nightly checks, none of it sold."""
+        alive = 1.0
+        for night in range(1, age + 1):
+            alive *= 1 - self.hazard(night)
+        return alive
 
     def total(self) -> int:
         return sum(b.qty for b in self.batches)

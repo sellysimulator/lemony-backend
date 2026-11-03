@@ -9,6 +9,9 @@ Spawn, per hour and person type (the user's "base + preference bonus"):
     expected  = spawn_per_hour * (1 + bonus) * weather_multiplier[weather]
     count     ~ Poisson(expected)
 
+The busiest day a config allows (``max_expected_customers``) is capped at
+``MAX_CUSTOMERS_PER_DAY``: a config over it is refused when it is created or changed.
+
 Buy — the recipe sets what a customer is willing to pay, the price is compared
 against it:
 
@@ -30,6 +33,13 @@ Popularity — carried across the game, fixed for a day, applied on top of P(buy
     final P     = min(1, P(buy) * (0.5 + popularity))
 
 So 0.5 is neutral, 0 halves the chance and 1 raises it by half.
+
+Why a visitor said no — from the one draw ``u`` the engine already makes per
+visitor (``buys = u < final P``), so naming the reason draws nothing:
+
+    not_popular   if u < P(buy): they would have bought at a neutral popularity
+                  (only possible while popularity < 0.5)
+    otherwise     refusal_reason(): too_cheap, too_pricey or the worst ingredient
 """
 
 from __future__ import annotations
@@ -37,8 +47,11 @@ from __future__ import annotations
 import math
 import random
 import statistics
+from functools import partial
 
-from .people import PersonType
+from .config_model import GameConfig
+from .people import PersonType, build_people
+from .weather import temperatures_by_weather
 
 
 def triangle_kernel(current: float, preferred: float, denominator: float) -> float:
@@ -48,10 +61,19 @@ def triangle_kernel(current: float, preferred: float, denominator: float) -> flo
     return min(1.0, max(0.0, 1 - abs(current - preferred) / denominator))
 
 
+def temperature_score(person: PersonType, temperature: float) -> float:
+    """How much this type likes the day's temperature (0-1); its range sets the reach."""
+    return triangle_kernel(temperature, person.preferred_degrees, person.denominators.temperature)
+
+
+def hour_score(person: PersonType, hour: int) -> float:
+    """How much this type likes being out at ``hour`` (0-1); the opening hours set the reach."""
+    return triangle_kernel(hour, person.preferred_hour, person.denominators.hour)
+
+
 def spawn_bonus(person: PersonType, hour: int, weather: str, temperature: float) -> float:
-    d = person.denominators
-    temp_s = triangle_kernel(temperature, person.preferred_degrees, d.temperature)
-    hour_s = triangle_kernel(hour, person.preferred_hour, d.hour)
+    temp_s = temperature_score(person, temperature)
+    hour_s = hour_score(person, hour)
     weather_s = 1.0 if weather == person.preferred_weather else 0.0
     return statistics.mean([weather_s, hour_s, temp_s])
 
@@ -61,6 +83,37 @@ def expected_spawn(
 ) -> float:
     bonus = spawn_bonus(person, hour, weather, temperature)
     return person.spawn_per_hour * (1 + bonus) * weather_multiplier
+
+
+def max_expected_customers(config: GameConfig) -> int:
+    """The most customers one day can expect under ``config``, rounded up to a whole one.
+
+    The worst case, over every weather the config can deal (``temperatures_by_weather``),
+    of the expected arrivals ``run_day`` draws: ``expected_spawn`` summed over every person
+    type and opening hour (``poisson`` draws a count whose mean is that rate).
+
+    A safe upper bound, not always the exact worst day: within a weather, each type is
+    counted at the temperature it likes best (the highest ``temperature_score``) among
+    those that weather comes with, while a real day has one temperature for every type.
+    That never undercounts (``expected_spawn`` grows with the temperature score), and it
+    is exact when the types' best temperatures coincide. It is over by less than a third
+    at worst (the temperature's share of the bonus); on the defaults it is 228 against an
+    exact 225.05. This is the figure the config screen shows and the cap is checked against.
+    """
+    people = build_people(config)
+    hours = range(config.min_max_values.hour.min, config.min_max_values.hour.max + 1)
+    worst = 0.0
+    for weather, temperatures in temperatures_by_weather(config).items():
+        if not temperatures:
+            continue
+        multiplier = config.weather_multipliers[weather]
+        total = 0.0
+        for person in people:
+            best = max(temperatures, key=partial(temperature_score, person))
+            total += sum(expected_spawn(person, hour, weather, best, multiplier) for hour in hours)
+        worst = max(worst, total)
+    # Float noise must not tip a whole number over: 225.00000000001 is 225.
+    return math.ceil(worst - 1e-9)
 
 
 def poisson(rng: random.Random, lam: float) -> int:
@@ -83,12 +136,16 @@ def asymmetric_kernel(current: float, preferred: float, below: float, above: flo
     return triangle_kernel(current, preferred, below if current < preferred else above)
 
 
+def ingredient_score(person: PersonType, name: str, amount: float) -> float:
+    """How much this type likes ``amount`` of one recipe ingredient (0-1), from its tolerances."""
+    below, above = getattr(person.tolerances, name)
+    return asymmetric_kernel(amount, getattr(person, f"preferred_{name}"), below, above)
+
+
 def ingredient_scores(person: PersonType, recipe: dict[str, int]) -> dict[str, float]:
-    t = person.tolerances
+    # Ice, sugar, lemons, in that order: refusal_reason breaks a tie on the first.
     return {
-        "ice": asymmetric_kernel(recipe["ice"], person.preferred_ice, *t.ice),
-        "sugar": asymmetric_kernel(recipe["sugar"], person.preferred_sugar, *t.sugar),
-        "lemons": asymmetric_kernel(recipe["lemons"], person.preferred_lemons, *t.lemons),
+        name: ingredient_score(person, name, recipe[name]) for name in ("ice", "sugar", "lemons")
     }
 
 
@@ -96,8 +153,13 @@ def recipe_quality(scores: dict[str, float]) -> float:
     return statistics.mean(scores.values())
 
 
+def wtp_share(quality: float, quality_swing: float) -> float:
+    """What a cup of ``quality`` is worth to a customer, as a share of their budget."""
+    return 1 + quality_swing * (2 * quality - 1)
+
+
 def willingness_to_pay(person: PersonType, quality: float, quality_swing: float) -> float:
-    return person.average_expense * (1 + quality_swing * (2 * quality - 1))
+    return person.average_expense * wtp_share(quality, quality_swing)
 
 
 def cheap_floor(person: PersonType) -> float:
@@ -123,17 +185,40 @@ def popularity(rates: list[float], start: float) -> float:
     return statistics.mean(rates) if rates else start
 
 
+# The popularity at which buy chances are left as price and recipe make them.
+NEUTRAL_POPULARITY = 0.5
+
+
+def popularity_factor(popularity: float) -> float:
+    """What every buy chance is multiplied by: ``0.5 + popularity`` (1 at NEUTRAL_POPULARITY)."""
+    return 0.5 + popularity
+
+
 def apply_popularity(probability: float, popularity: float) -> float:
-    """Scale a buy chance by ``0.5 + popularity``: neutral at 0.5, capped at 1."""
-    return min(1.0, probability * (0.5 + popularity))
+    """Scale a buy chance by ``popularity_factor``: neutral at 0.5, capped at 1."""
+    return min(1.0, probability * popularity_factor(popularity))
+
+
+NOT_POPULAR = "not_popular"
+
+
+def refused_for_popularity(draw: float, base: float) -> bool:
+    """Whether a refusal was popularity's doing: the visitor's draw would have bought at a
+    neutral popularity (0.5), where the chance is ``base`` itself.
+
+    Never true when popularity is 0.5 or more: the chance is then at least ``base``, so a
+    draw that refused is at least ``base`` too.
+    """
+    return draw < base
 
 
 def refusal_reason(
     person: PersonType, price: float, recipe: dict[str, int], scores: dict[str, float]
 ) -> str:
-    """Why a customer said no, phrased for the player.
+    """Why a customer said no to the price and recipe, phrased for the player.
 
-    Under the suspicious floor it is the price. Otherwise the price is blamed when
+    The engine asks only when popularity did not cause the refusal
+    (``refused_for_popularity``). Under the suspicious floor it is the price. Otherwise the price is blamed when
     it sits further over the budget (in units of the price tolerance) than the
     worst ingredient sits under a perfect score; else that ingredient is.
     """

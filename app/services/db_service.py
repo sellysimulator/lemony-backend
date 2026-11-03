@@ -7,6 +7,11 @@ rows each go in one executemany). It is synchronous — call it through
 MySQL. It never raises: on failure it logs and returns None, and the live
 document keeps `persisted: false`.
 
+The player's stats are not part of that transaction. Once the game is committed they
+are recomputed in a session of their own (`stats_service.refresh_user_stats`); a
+failure there is logged and changes nothing about the save (the public id is still
+returned, so `game_persisted` is still sent), and reading the stats repairs them.
+
 Every field of a day record is stored, so `load_game_detail` rebuilds the live
 summary exactly through the same builder (`engine.summarize`).
 """
@@ -25,9 +30,9 @@ from sqlalchemy.orm import Session
 from app.core.money import round_cents
 
 from ..core.defaults import INGREDIENT_NAMES, PERSON_TYPES
-from ..core.engine import summarize
+from ..core.engine import success_rate, summarize
 from ..models.game import Game, GameConfigRow, GameDay, GameDayHour, GameDayType
-from .stats_service import recompute_user_stats
+from .stats_service import refresh_user_stats
 from .user_service import UserService
 
 logger = logging.getLogger(__name__)
@@ -57,8 +62,13 @@ def is_guest(identity: str) -> bool:
     return identity.startswith("guest_")
 
 
+_TYPE_FIELDS = ("visitors", "buyers", "sold_out")
+_HOUR_FIELDS = ("hour", "visitors", "buyers", "sold_out")
+
+
 def _day_row(game_id: int, d: dict[str, Any]) -> dict[str, Any]:
     inventory_end = d.get("inventory_end") or {}
+    inventory_open = d.get("inventory_open") or {}
     return {
         "game_id": game_id,
         "day": d["day"],
@@ -68,11 +78,12 @@ def _day_row(game_id: int, d: dict[str, Any]) -> dict[str, Any]:
         "recipe_ice": d["recipe"]["ice"],
         "recipe_sugar": d["recipe"]["sugar"],
         "recipe_lemons": d["recipe"]["lemons"],
-        "cost_per_cup": _money(d["cost_per_cup"]),
+        "cost_per_cup": None if d["cost_per_cup"] is None else _money(d["cost_per_cup"]),
         "bought_ice": d["purchased"]["ice"],
         "bought_sugar": d["purchased"]["sugar"],
         "bought_lemons": d["purchased"]["lemons"],
         "bought_cups": d["purchased"]["cups"],
+        **{f"inventory_open_{name}": inventory_open.get(name) for name in INGREDIENT_NAMES},
         "spend": _money(d["spend"]),
         "revenue": _money(d["revenue"]),
         "profit": _money(d["profit"]),
@@ -93,6 +104,10 @@ def _day_row(game_id: int, d: dict[str, Any]) -> dict[str, Any]:
 
 
 def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any]) -> Game:
+    """Insert the finished game (or return the stored copy); the caller commits.
+
+    Writes the game only: the player's stats are recomputed after the commit.
+    """
     public_id = document["game_id"]
     existing = db.execute(select(Game).where(Game.public_id == public_id)).scalar_one_or_none()
     if existing is not None:
@@ -128,50 +143,75 @@ def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any])
     db.add(game)
     db.flush()
     db.add(GameConfigRow(game_id=game.id, config=document["engine"]["config"]))
+    # The summary's days are views: only the record's own fields are stored, and the
+    # figures derived from them are derived again on load (engine.day_view).
     days = summary["days"]
     if days:
         db.execute(insert(_GAME_DAYS), [_day_row(game.id, d) for d in days])
         db.execute(
             insert(_GAME_DAY_TYPES),
             [
-                {"game_id": game.id, "day": d["day"], "person_type": kind, **d["by_type"][kind]}
+                {
+                    "game_id": game.id,
+                    "day": d["day"],
+                    "person_type": kind,
+                    **{key: d["by_type"][kind][key] for key in _TYPE_FIELDS},
+                }
                 for d in days
                 for kind in PERSON_TYPES
             ],
         )
-        hours = [{"game_id": game.id, "day": d["day"], **h} for d in days for h in d["by_hour"]]
+        hours = [
+            {"game_id": game.id, "day": d["day"], **{key: h[key] for key in _HOUR_FIELDS}}
+            for d in days
+            for h in d["by_hour"]
+        ]
         if hours:
             db.execute(insert(_GAME_DAY_HOURS), hours)
     db.flush()
-    if user_id is not None:
-        recompute_user_stats(db, user_id)
     return game
 
 
-def persist_finished_game(document: dict[str, Any], summary: dict[str, Any]) -> str | None:
+def _save_game(document: dict[str, Any], summary: dict[str, Any]) -> tuple[str, int | None] | None:
+    """Commit the game in its own transaction: (public id, owner's user id), or None."""
     from ..db import session as db_session
 
     db = db_session.SessionLocal()
     try:
         game = persist_game(db, document, summary)
+        saved = (game.public_id, game.user_id)  # read before the commit expires them
         db.commit()
-        return game.public_id
+        return saved
     except IntegrityError:
         # Another writer stored the same game first: that copy is the result.
         db.rollback()
         try:
-            return db.execute(
-                select(Game.public_id).where(Game.public_id == document["game_id"])
-            ).scalar_one_or_none()
+            row = db.execute(
+                select(Game.public_id, Game.user_id).where(Game.public_id == document["game_id"])
+            ).one_or_none()
         except Exception:
             logger.exception("Failed to persist finished game.")
             return None
+        return (row.public_id, row.user_id) if row is not None else None
     except Exception:
         db.rollback()
         logger.exception("Failed to persist finished game.")
         return None
     finally:
         db.close()
+
+
+def persist_finished_game(document: dict[str, Any], summary: dict[str, Any]) -> str | None:
+    saved = _save_game(document, summary)
+    if saved is None:
+        return None
+    public_id, user_id = saved
+    # Only now, with the game committed: a stats failure is logged and leaves the save
+    # as it is. Also run when the game was already stored (a retry, or another writer
+    # first), since that writer's recompute may not have happened.
+    if user_id is not None:
+        refresh_user_stats(user_id, public_id)
+    return public_id
 
 
 def _f(value: Decimal | None) -> float | None:
@@ -192,6 +232,7 @@ def game_row_summary(game: Game) -> dict[str, Any]:
         "total_buyers": game.total_buyers,
         "total_sold_out": game.total_sold_out,
         "final_popularity": _f(game.final_popularity),
+        "conversion": success_rate(game.total_buyers, game.total_visitors),
         "started_at": game.started_at.isoformat(),
         "finished_at": game.finished_at.isoformat(),
     }
@@ -227,7 +268,7 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
             "temperature": float(d.temperature),
             "price": float(d.price),
             "recipe": {"ice": d.recipe_ice, "sugar": d.recipe_sugar, "lemons": d.recipe_lemons},
-            "cost_per_cup": float(d.cost_per_cup),
+            "cost_per_cup": _f(d.cost_per_cup),
             "purchased": {name: getattr(d, f"bought_{name}") for name in INGREDIENT_NAMES},
             "spend": float(d.spend),
             "revenue": float(d.revenue),
@@ -248,6 +289,9 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
         inventory_end = {name: getattr(d, f"inventory_end_{name}") for name in INGREDIENT_NAMES}
         if None not in inventory_end.values():  # absent on games stored before it was kept
             day["inventory_end"] = inventory_end
+        inventory_open = {name: getattr(d, f"inventory_open_{name}") for name in INGREDIENT_NAMES}
+        if None not in inventory_open.values():  # absent on games stored before it was kept
+            day["inventory_open"] = inventory_open
         days.append(day)
     detail = summarize(
         num_days=game.num_days,

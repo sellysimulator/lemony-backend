@@ -4,14 +4,14 @@ import re
 from collections import Counter
 from typing import Any, Self
 
-from sqlalchemy import event, select
+from sqlalchemy import event, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.config_model import GameConfig
 from app.core.defaults import default_config
 from app.core.engine import DayPlan, LemonadeGame
 from app.db.session import SessionLocal, engine
-from app.models.game import Game, UserStats
+from app.models.game import Game, GameDay, UserStats
 from app.services import db_service
 from app.services import game_service as gs
 
@@ -22,12 +22,14 @@ PLAN = {
 }
 
 
-def finished_document(days: int = 3, identity: str = "guest_persist") -> dict[str, Any]:
+def finished_document(
+    days: int = 3, identity: str = "guest_persist", plans: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     data = default_config()
     data["num_days"] = days
     game = LemonadeGame(GameConfig.model_validate(data), seed=20261022)
     for day in range(1, days + 1):
-        game.run_day(DayPlan.model_validate(PLAN))
+        game.run_day(DayPlan.model_validate(plans[day - 1] if plans else PLAN))
         game.acknowledge_day(day)
     assert game.phase == "finished"
     return {
@@ -95,6 +97,29 @@ def test_a_stored_game_rebuilds_the_live_summary_exactly():
     assert stored["started_at"] and stored["finished_at"]
     assert {k: v for k, v in stored.items() if k not in ("started_at", "finished_at")} == live
     assert all(day["inventory_end"] for day in stored["days"])
+    # The opening stock is stored, and the figures derived from the record are derived
+    # again on load (they have no columns).
+    assert all(day["inventory_open"] and day["cups_open"] for day in stored["days"])
+    assert stored["days"][1]["cash_start"] == stored["days"][0]["cash_end"]
+    assert all("conversion" in h for day in stored["days"] for h in day["by_hour"])
+
+
+def test_a_game_stored_before_the_opening_stock_was_kept_has_no_opening_figures():
+    document = finished_document(days=1)
+    public_id = db_service.persist_finished_game(document, gs.engine_of(document).summary())
+    with SessionLocal() as db:
+        db.execute(
+            update(GameDay).values(
+                inventory_open_ice=None,
+                inventory_open_sugar=None,
+                inventory_open_lemons=None,
+                inventory_open_cups=None,
+            )
+        )
+        db.commit()
+        game = db.execute(select(Game).where(Game.public_id == public_id)).scalar_one()
+        day = db_service.load_game_detail(db, game)["days"][0]
+    assert "inventory_open" not in day and day["cups_open"] is None
 
 
 def test_a_failure_while_resolving_a_duplicate_returns_none(monkeypatch, caplog):
@@ -135,3 +160,20 @@ def test_the_best_game_tie_goes_to_the_latest_stored():
         assert games[0].finished_at == games[1].finished_at
         stats = db.get(UserStats, games[0].user_id)
         assert stats is not None and stats.best_game_id == games[1].id
+
+
+def test_a_day_with_no_cup_to_make_is_stored_and_read_back_without_a_cost():
+    # Day 2 buys nothing and last night melted the ice: not a single cup can be made.
+    document = finished_document(days=2, plans=[PLAN, {**PLAN, "purchases": {}}])
+    summary = gs.engine_of(document).summary()
+    assert summary["days"][0]["cost_per_cup"] is not None
+    assert summary["days"][1]["buyers"] == 0 and summary["days"][1]["cost_per_cup"] is None
+    public_id = db_service.persist_finished_game(document, summary)
+    assert public_id
+    document["public_id"] = public_id
+    with SessionLocal() as db:
+        game = db.execute(select(Game).where(Game.public_id == public_id)).scalar_one()
+        stored = db_service.load_game_detail(db, game)
+    assert stored["days"][1]["cost_per_cup"] is None
+    live = gs.summary_of(document)
+    assert {k: v for k, v in stored.items() if k not in ("started_at", "finished_at")} == live

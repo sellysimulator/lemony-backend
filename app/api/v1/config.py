@@ -1,17 +1,35 @@
-"""Default game configuration and server-side validation for the config screen."""
+"""Default game configuration, the limits, and server-side checks for the config screen.
+
+`POST /config/preview` is what the config screen calls (debounced) on every edit: the
+verdict of `/config/validate` plus every figure the screen and its help show for the
+draft (`core/config_preview.py`, and the busiest day's customers,
+`demand.max_expected_customers`). `/config/validate` and `/config/cup-cost` stay for
+clients from before it.
+"""
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from pydantic import ValidationError
 
+from ...core.config_model import GameConfig, IngredientConfig
+from ...core.config_preview import config_help, ingredient_preview
 from ...core.defaults import (
     INGREDIENT_NAMES,
     PERSON_TYPES,
     WEATHER_TYPES,
     default_config,
 )
-from ...core.limits import MAX_NUM_DAYS
-from ...schemas.user import ConfigDefaultsResponse, ConfigValidateResponse
+from ...core.demand import max_expected_customers
+from ...core.engine import LemonadeGame, PlanError
+from ...core.limits import public_limits
+from ...schemas.user import (
+    ConfigDefaultsResponse,
+    ConfigPreviewResponse,
+    ConfigValidateResponse,
+    CupCostRequest,
+    CupCostResponse,
+)
 from ...services.game_service import GameError, parse_config
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -24,7 +42,7 @@ def get_defaults() -> ConfigDefaultsResponse:
         weather_types=list(WEATHER_TYPES),
         person_types=list(PERSON_TYPES),
         ingredient_names=list(INGREDIENT_NAMES),
-        max_num_days=MAX_NUM_DAYS,
+        limits=public_limits(),
     )
 
 
@@ -36,3 +54,75 @@ def validate_config(config: dict[str, Any]) -> ConfigValidateResponse:
     except GameError as exc:
         return ConfigValidateResponse(valid=False, message=exc.message)
     return ConfigValidateResponse(valid=True)
+
+
+def _customers_if_capped(config: dict[str, Any]) -> int | None:
+    """The busiest day's customers of a refused config that is valid apart from the cap on
+    them (so the screen can show how far over it is); None when anything else is wrong."""
+    try:
+        parsed = GameConfig.validate_uncapped(config)
+    except ValidationError:
+        return None
+    return max_expected_customers(parsed)
+
+
+def _ingredients_alone(config: dict[str, Any]) -> dict[str, dict[str, Any] | None]:
+    """Each ingredient's figures from its own settings, for a config that fails as a whole."""
+    raw = config.get("ingredients")
+    out: dict[str, dict[str, Any] | None] = {}
+    for name in INGREDIENT_NAMES:
+        try:
+            cfg = IngredientConfig.model_validate(raw.get(name) if isinstance(raw, dict) else None)
+        except ValidationError:
+            out[name] = None
+        else:
+            out[name] = ingredient_preview(name, cfg)
+    return out
+
+
+@router.post("/preview", response_model=ConfigPreviewResponse)
+def preview_config(config: dict[str, Any]) -> ConfigPreviewResponse:
+    """The verdict on a draft config and every figure the config screen and help show.
+
+    Always 200: an invalid draft answers `valid: false` with the player-facing reason,
+    the figures of each ingredient that is valid on its own, and no `help`;
+    `customers_per_day` only when the cap on it is what refused the draft.
+    """
+    try:
+        parsed = parse_config(config)
+    except GameError as exc:
+        return ConfigPreviewResponse(
+            valid=False,
+            message=exc.message,
+            customers_per_day=_customers_if_capped(config),
+            ingredients=_ingredients_alone(config),
+        )
+    return ConfigPreviewResponse(
+        valid=True,
+        customers_per_day=max_expected_customers(parsed),
+        ingredients={
+            name: ingredient_preview(name, parsed.ingredients[name]) for name in INGREDIENT_NAMES
+        },
+        help=config_help(parsed),
+    )
+
+
+@router.post("/cup-cost", response_model=CupCostResponse)
+def cup_cost(request: CupCostRequest) -> CupCostResponse:
+    """What these packs cost on day 1, and the cups they make with this recipe at what cost
+    per cup: the engine's own figures, for the help's examples. Cash is not checked.
+
+    Refusals are 422 with the same player-facing sentence the game gives.
+    """
+    try:
+        config = parse_config(request.config)
+    except GameError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from None
+    game = LemonadeGame(config, seed=0)  # nothing is drawn: the seed plays no part
+    try:
+        game.validate_recipe(request.recipe)
+        spend, _, lots = game.purchase_cost(request.purchases)
+    except PlanError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    cups, cost = game.cup_cost(request.recipe, lots)
+    return CupCostResponse(spend=spend, cups_possible=cups, cost_per_cup=cost)

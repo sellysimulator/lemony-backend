@@ -1,11 +1,9 @@
-"""The one rounding rule for money, shared with the frontend (src/utils/money.ts).
+"""The one rounding rule for money.
 
 Round to whole cents, halves away from zero, after trimming float noise to 12
 significant digits: 0.125 is stored as 0.12499999999999999..., and without the
-trim it would round down on one side and up on the other. Both sides compute
-in the same order on IEEE doubles, so they agree to the cent.
-
-The shared cases in tests/fixtures/rounding_cases.json must pass on both sides.
+trim it would round down. Only the server rounds: every money figure it sends is
+already rounded, so the client prints it with two decimals and rounds nothing.
 """
 
 from __future__ import annotations

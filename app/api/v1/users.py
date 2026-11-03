@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ...core.engine import success_rate
 from ...db.session import get_db
-from ...models.game import Game, UserStats
+from ...models.game import Game
 from ...schemas.user import (
     GameListItem,
     GameListResponse,
@@ -17,6 +18,7 @@ from ...schemas.user import (
     UserUpsertRequest,
 )
 from ...services.db_service import game_row_summary, load_game_detail
+from ...services.stats_service import current_user_stats
 from ...services.user_service import UserService
 from ..deps import get_current_firebase_user
 
@@ -78,8 +80,9 @@ def get_my_stats(
     db: Annotated[Session, Depends(get_db)],
     claims: Annotated[dict, Depends(get_current_firebase_user)],
 ) -> UserStatsResponse:
+    """The player's stats, repaired first when a saved game is missing from them."""
     user = _user_service.get_by_firebase_uid(db, claims["uid"])
-    stats = db.get(UserStats, user.id) if user else None
+    stats = current_user_stats(db, user.id) if user else None
     if stats is None:
         return UserStatsResponse()
     best = db.get(Game, stats.best_game_id) if stats.best_game_id else None
@@ -89,6 +92,7 @@ def get_my_stats(
         days_played=stats.days_played,
         total_cups_sold=stats.total_cups_sold,
         total_visitors=stats.total_visitors,
+        conversion=success_rate(stats.total_cups_sold, stats.total_visitors),
         total_profit=float(stats.total_profit),
         best_profit=float(stats.best_profit) if stats.best_profit is not None else None,
         avg_profit=float(stats.avg_profit) if stats.avg_profit is not None else None,
