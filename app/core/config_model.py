@@ -5,13 +5,25 @@ and person types: those dictionaries must carry exactly the fixed keys.
 Cross-field rules (a preference must lie inside its range, weather temperature
 ranges must cover the whole temperature range, ...) raise ``ValueError`` with a
 sentence the configuration screen shows verbatim.
+
+The last rule caps the busiest day: ``demand.max_expected_customers`` must not exceed
+``MAX_CUSTOMERS_PER_DAY``. It applies when a config is created or changed
+(``model_validate``), never when a stored game is read back (``validate_uncapped``), so
+a game made before the cap, or with a config it now refuses, still loads and plays.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from .defaults import (
     INGREDIENT_NAMES,
@@ -21,6 +33,7 @@ from .defaults import (
 )
 from .limits import (
     MAX_AVERAGE_EXPENSE,
+    MAX_CUSTOMERS_PER_DAY,
     MAX_FRESH_DAYS,
     MAX_HOUR,
     MAX_MAX_DAYS,
@@ -207,6 +220,10 @@ class IngredientConfig(_Strict):
         return self
 
 
+# The validation context key that turns the customers-per-day cap off (``validate_uncapped``).
+_CUSTOMERS_CAP = "customers_cap"
+
+
 def _exact_keys(value: dict, expected: tuple[str, ...], what: str) -> dict:
     if set(value) != set(expected):
         raise ValueError(f"{what} must have exactly these keys: {', '.join(expected)}")
@@ -261,8 +278,19 @@ class GameConfig(_Strict):
     def _ingredient_keys(cls, value: dict) -> dict:
         return _exact_keys(value, INGREDIENT_NAMES, "ingredients")
 
+    @classmethod
+    def validate_uncapped(cls, data: Any) -> GameConfig:
+        """Every rule but the cap on customers a day.
+
+        For a stored game's config, which was accepted when the game was created: the cap
+        applies only when a config is created or changed, so a game made before it, or
+        with a config it now refuses, still loads and plays. The config preview uses it
+        too, to show the figure of a config the cap refuses.
+        """
+        return cls.model_validate(data, context={_CUSTOMERS_CAP: False})
+
     @model_validator(mode="after")
-    def _cross_field(self) -> GameConfig:
+    def _cross_field(self, info: ValidationInfo) -> GameConfig:
         mm = self.min_max_values
         for ptype, prefs in self.people_preferences.items():
             for name in RECIPE_INGREDIENTS:
@@ -288,7 +316,26 @@ class GameConfig(_Strict):
                     f"price range {mm.price.min}-{mm.price.max}"
                 )
         self._check_weather_coverage()
+        if (info.context or {}).get(_CUSTOMERS_CAP, True):
+            self._check_customers_per_day()
         return self
+
+    def _check_customers_per_day(self) -> None:
+        """The busiest day this config allows must stay within MAX_CUSTOMERS_PER_DAY.
+
+        Refused, never scaled down: the player changes the numbers that drive it.
+        """
+        # Imported here: demand builds on this module (through people and weather).
+        from .demand import max_expected_customers
+
+        expected = max_expected_customers(self)
+        if expected > MAX_CUSTOMERS_PER_DAY:
+            raise ValueError(
+                f"Up to {expected:,} customers could come on the busiest day, over the "
+                f"limit of {MAX_CUSTOMERS_PER_DAY:,} a day. Lower the base visitors per "
+                "hour of the customer types, shorten the opening hours or lower the "
+                "weather traffic multipliers."
+            )
 
     def _check_weather_coverage(self) -> None:
         """The weather ranges, together, must cover the temperature range with no gap."""

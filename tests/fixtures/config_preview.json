@@ -270,6 +270,7 @@
   "reply": {
     "valid": true,
     "message": null,
+    "customers_per_day": 228,
     "ingredients": {
       "ice": {
         "packs": [

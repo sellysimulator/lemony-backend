@@ -75,6 +75,16 @@ else from the template needs the user's explicit OK.
   (±1e12, ±inf, NaN) and expects a refusal, and checks each served bound is the one
   enforced. `public_limits()` is what the client reads (`GET /config/defaults` `limits`
   and every game state's `limits`): the frontend hand-copies no bound.
+- **Customers a day are capped** (`MAX_CUSTOMERS_PER_DAY` = 5,000; served as
+  `limits.customers_per_day`): every traffic limit is fine alone, but together they made
+  one `run_day` ~83,000 customers. `demand.max_expected_customers(config)` is the one
+  figure (a safe upper bound on the busiest day's expected arrivals, from `expected_spawn`
+  over `weather.temperatures_by_weather`; 228 on the defaults). The last `GameConfig`
+  cross-field rule refuses a config over it (never clamps); the check runs on
+  `model_validate` only. `LemonadeGame.from_payload` reads stored configs with
+  `GameConfig.validate_uncapped`, so games stored before the cap still load and play.
+  `POST /config/preview` sends the figure as `customers_per_day`, also beside the cap's
+  refusal. Tests: `tests/test_core/test_customers_cap.py`.
 - **The server computes every figure the client shows; the client copies no formula.**
   Each figure comes from the function the engine itself uses (never a second
   implementation), and a new one goes in an existing payload or a server function next
@@ -100,11 +110,20 @@ else from the template needs the user's explicit OK.
   while the rest is invalid; `config_help` (weather odds via `weather.weather_odds`,
   the demand curves, worked examples, cost-per-cup examples via `purchase_cost` /
   `cup_cost`, example plans from `plans.py`) needs the whole config. It picks its own
-  x-axes (`grids`). `tests/fixtures/config_preview.json` is its reply for the defaults.
+  x-axes (`grids`). The route adds `customers_per_day` (`demand.max_expected_customers`)
+  whenever the config is valid apart from that cap, null otherwise.
+  `tests/fixtures/config_preview.json` is its reply for the defaults.
 - **History goes out only in full states.** `game_state` is `{seq, full, state}`: full on
-  create, resume and `request_state`, daily (no `days`, `last_day_events` or `summary`)
-  after `ack_day` and inside `day_result`. The client appends `day_result.record` to the
-  days it holds. Details in the `game.py` docstring.
+  create, resume and `request_state`, daily (no `days` or `summary`) after `ack_day` and
+  inside `day_result`. The client appends `day_result.record` to the days it holds.
+  Details in the `game.py` docstring.
+- **A day's customers are sent once and never stored.** `run_day` returns `events` (one
+  per visitor) and `day_result` carries them, for the playback; the engine payload keeps
+  no copy (no `last_day_events`), so a saved game no longer grows with the crowd (at the
+  5,000 cap a day's list is ~1.2 MB). A duplicate `day_result` sends `events: null` ("not
+  available"), and a full state never carries them: the client opens that day's report
+  instead of replaying. `tests/test_services/test_daily_state.py` and `test_engine.py`
+  check it.
 - **`core/preview.py` `plan_preview(game, plan, price)`** feeds the morning plan: expected
   chance, visitors, cups and margin across the price-input grid, the plan's
   `cups_possible` and `cost_per_cup`, `spend`, `cash_after`, `units` and `can_add`, and
@@ -146,17 +165,18 @@ stubs), `attr-defined` on DML `rowcount` (SQLAlchemy types `execute()` as `Resul
 
 Change these together, backend first, and ship both halves in the same window. The
 exception: when the backend stops sending a field the live frontend reads (as when round
-events dropped the history), ship the frontend first, or an open tab on the old frontend
+events dropped the history, or states dropped `last_day_events` and a duplicate
+`day_result` got `events: null`), ship the frontend first, or an open tab on the old frontend
 crashes until it is reloaded.
 
 | What | Backend | Frontend |
 |---|---|---|
-| Socket events & payloads (incl. `retry_persist` → `game_persisted` / `game_persist_failed`) | `app/sockets/handlers/game.py` (+ `connection.py` handshake) | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts` |
+| Socket events & payloads (incl. `retry_persist` → `game_persisted` / `game_persist_failed`, `day_result.events` null when not available) | `app/sockets/handlers/game.py` (+ `connection.py` handshake) | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts` |
 | Plan preview (`preview_plan` with `price` → `plan_preview`: curve, cost/margin per cup, spend, cash after, units, `can_add`, `price_error`, `at_price`) | `app/core/preview.py`, `app/sockets/handlers/game.py` | `src/api/socketHandlers.ts`, `src/types/game.ts`, `src/store/gameStore.ts`, `src/components/plan/` |
-| Config preview (`POST /config/preview`: verdict, `ingredients`, `help`) | `app/core/config_preview.py`, `plans.py`, `weather.weather_odds`, `ingredients.pack_offers`, `app/api/v1/config.py` | `src/api/rest.ts`, `src/types/game.ts` (`ConfigPreview`), `pages/ConfigPage.tsx`, `components/config/PacksEditor.tsx`, `components/config/docs/` |
+| Config preview (`POST /config/preview`: verdict, `customers_per_day`, `ingredients`, `help`) | `app/core/config_preview.py`, `plans.py`, `weather.weather_odds`, `ingredients.pack_offers`, `demand.max_expected_customers`, `app/api/v1/config.py` | `src/api/rest.ts`, `src/types/game.ts` (`ConfigPreview`), `pages/ConfigPage.tsx`, `components/config/PacksEditor.tsx`, `components/config/docs/` |
 | Config preview fixture | `tests/fixtures/config_preview.json` (= its reply for the defaults) | `src/__tests__/fixtures/config_preview.json` (byte-identical) |
 | Derived record and summary figures (`day_view`, `summarize`, event `sales`/`stock`/`cups_left`, state `packs`/`popularity_factor`/`suggested_plan`, profile `conversion`) | `app/core/engine.py`, `app/services/db_service.py`, `app/api/v1/users.py` | `src/types/game.ts`; shown only: `PlanDay`, `DayReport`, `GameOver`, `charts/endgame/`, `day/Hud`, `day/InventoryPanel`, `ProfilePage` |
-| Limits (every bound, the price step) | `core/limits.py` `public_limits()` → `/config/defaults` `limits` and game state `limits` | `src/types/game.ts` `Limits`; read by `ConfigPage`, `PacksEditor`, `PlanDay`, the help |
+| Limits (every bound, the price step, the cap on customers a day) | `core/limits.py` `public_limits()` → `/config/defaults` `limits` and game state `limits` | `src/types/game.ts` `Limits`; read by `ConfigPage`, `PacksEditor`, `PlanDay`, the help |
 | Limits fixture | `tests/fixtures/limits.json` (= `public_limits()`) | `src/__tests__/fixtures/limits.json` (byte-identical) |
 | Cost per cup | `engine.cup_cost` (preview, day record, config preview's `cup_cost`) | shown only: `PlanDay`, `DayReport`, the help |
 | REST shapes | `app/schemas/user.py`, `app/api/v1/*` | `src/api/rest.ts` |
@@ -191,7 +211,7 @@ decimals.
   `inventory_open`, the views) read the engine's state and draw nothing;
   `weather.roll_day_weather` is `day_temperature` + `weathers_at` with the same two draws.
 - **Idempotency.** Every outbound event carries a per-game monotonic `seq` (the client drops
-  stale ones), except `plan_preview`, a request-scoped reply matched by `request_id`. `submit_day` replays return the stored record with `duplicate=True`;
+  stale ones), except `plan_preview`, a request-scoped reply matched by `request_id`. `submit_day` replays return the stored record with `duplicate=True` (and `events: None`);
   `persist_if_finished` is safe to repeat; `resume_game` and `retry_persist` retry it, and
   a failure is reported as `game_persist_failed`. `create_game` never abandons a finished,
   unsaved game: it retries the save and refuses with `UNSAVED_GAME` while it fails.
@@ -207,12 +227,15 @@ decimals.
   restarts, not an in-process dict.)
 - **Stored-game compatibility.** Live docs carry `schema_version` (`SCHEMA_VERSION=2`); a
   mismatch is **deleted on read**, never migrated. `from_payload` re-validates config with
-  `GameConfig`, so tightening validation can make in-flight games unloadable. Legacy paths
+  `GameConfig.validate_uncapped` (every rule but the customers-a-day cap), so tightening
+  any other rule can make in-flight games unloadable. Legacy paths
   (`pack_sizes`, `Batch.unit_cost=None`) exist for old docs — don't remove them without
   bumping the schema version. Day records may hold `cost_per_cup: null` (migration 0004);
   older stored days keep the list price on no-sale days and the refusal reasons they had.
   `inventory_open` (migration 0005) is absent on days played before it, and so are the
   events' `sales`/`stock`/`cups_left`: the client then hides the playback's stock panel.
+  Documents saved before the per-customer list was dropped still carry
+  `engine.last_day_events`: `from_payload` ignores it and the next save drops it.
 - **Day views are never stored.** `summarize` returns `day_view`s, so persistence writes
   only the record's own fields (`_day_row`, `_TYPE_FIELDS`, `_HOUR_FIELDS`, all explicit)
   and `load_game_detail` derives the views again; `test_persistence` checks the stored

@@ -67,8 +67,8 @@ def engine_of(document: dict[str, Any]) -> LemonadeGame:
 
 
 # What a daily state leaves out: they grow with the game, and the round's own event
-# (`day_result` record + events, `game_finished` summary) carries the new part.
-HISTORY_KEYS = ("days", "last_day_events", "summary")
+# (`day_result` record, `game_finished` summary) carries the new part.
+HISTORY_KEYS = ("days", "summary")
 
 
 def public_state(document: dict[str, Any], full: bool = True) -> dict[str, Any]:
@@ -181,7 +181,8 @@ async def submit_day(
     """Run the day. Returns (document, result, duplicate).
 
     Idempotent: re-submitting a day that has already been played returns the
-    stored result with `duplicate=True` and changes nothing.
+    stored record with `duplicate=True` and changes nothing. Its `events` are None: the
+    game keeps no per-customer list, so a re-sent day has no customers to replay.
     """
     game_id = data.get("game_id")
     day = data.get("day")
@@ -192,7 +193,7 @@ async def submit_day(
             raise GameError("INVALID_PLAN", "day must be a number")
         if engine.phase != "planning" or day != engine.day:
             if engine.days and engine.days[-1]["day"] == day and engine.phase != "planning":
-                stored = {"record": engine.day_records()[-1], "events": engine.last_day_events}
+                stored = {"record": engine.day_records()[-1], "events": None}
                 return document, stored, True
             raise GameError("WRONG_DAY", f"It is day {engine.day}, not day {day}.")
         try:

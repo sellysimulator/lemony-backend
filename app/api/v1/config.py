@@ -2,7 +2,8 @@
 
 `POST /config/preview` is what the config screen calls (debounced) on every edit: the
 verdict of `/config/validate` plus every figure the screen and its help show for the
-draft (`core/config_preview.py`). `/config/validate` and `/config/cup-cost` stay for
+draft (`core/config_preview.py`, and the busiest day's customers,
+`demand.max_expected_customers`). `/config/validate` and `/config/cup-cost` stay for
 clients from before it.
 """
 
@@ -11,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
 
-from ...core.config_model import IngredientConfig
+from ...core.config_model import GameConfig, IngredientConfig
 from ...core.config_preview import config_help, ingredient_preview
 from ...core.defaults import (
     INGREDIENT_NAMES,
@@ -19,6 +20,7 @@ from ...core.defaults import (
     WEATHER_TYPES,
     default_config,
 )
+from ...core.demand import max_expected_customers
 from ...core.engine import LemonadeGame, PlanError
 from ...core.limits import public_limits
 from ...schemas.user import (
@@ -54,6 +56,16 @@ def validate_config(config: dict[str, Any]) -> ConfigValidateResponse:
     return ConfigValidateResponse(valid=True)
 
 
+def _customers_if_capped(config: dict[str, Any]) -> int | None:
+    """The busiest day's customers of a refused config that is valid apart from the cap on
+    them (so the screen can show how far over it is); None when anything else is wrong."""
+    try:
+        parsed = GameConfig.validate_uncapped(config)
+    except ValidationError:
+        return None
+    return max_expected_customers(parsed)
+
+
 def _ingredients_alone(config: dict[str, Any]) -> dict[str, dict[str, Any] | None]:
     """Each ingredient's figures from its own settings, for a config that fails as a whole."""
     raw = config.get("ingredients")
@@ -73,16 +85,21 @@ def preview_config(config: dict[str, Any]) -> ConfigPreviewResponse:
     """The verdict on a draft config and every figure the config screen and help show.
 
     Always 200: an invalid draft answers `valid: false` with the player-facing reason,
-    the figures of each ingredient that is valid on its own, and no `help`.
+    the figures of each ingredient that is valid on its own, and no `help`;
+    `customers_per_day` only when the cap on it is what refused the draft.
     """
     try:
         parsed = parse_config(config)
     except GameError as exc:
         return ConfigPreviewResponse(
-            valid=False, message=exc.message, ingredients=_ingredients_alone(config)
+            valid=False,
+            message=exc.message,
+            customers_per_day=_customers_if_capped(config),
+            ingredients=_ingredients_alone(config),
         )
     return ConfigPreviewResponse(
         valid=True,
+        customers_per_day=max_expected_customers(parsed),
         ingredients={
             name: ingredient_preview(name, parsed.ingredients[name]) for name in INGREDIENT_NAMES
         },

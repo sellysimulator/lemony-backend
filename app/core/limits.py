@@ -29,6 +29,9 @@ MAX_AVERAGE_EXPENSE = 100
 MAX_TOLERANCE = 20  # units per cup, for the ingredient tolerances
 MAX_PRICE_TOLERANCE_ABOVE = 5  # a share of the budget (500%); must be above 0
 MAX_WEATHER_MULTIPLIER = 3
+# Customers the busiest day of a config may expect (``demand.max_expected_customers``):
+# each limit above is fine alone, but together they made one day ~83,000 customers.
+MAX_CUSTOMERS_PER_DAY = 5000
 
 MAX_UNIT_COST = 100
 MIN_PACKS = 1  # pack sizes on sale per ingredient
@@ -56,6 +59,8 @@ def public_limits() -> dict[str, dict[str, float] | float]:
     The one exception is ``price_tolerance_above``, whose minimum is exclusive (it must
     be above 0). Recipe amounts, hours, temperatures and prices also have to sit
     inside the config's own ranges; those are checked by ``GameConfig``.
+    ``customers_per_day`` bounds no single field: it caps the busiest day the traffic
+    fields add up to (``POST /config/preview`` sends the config's figure).
     """
     return {
         "num_days": _range(MIN_NUM_DAYS, MAX_NUM_DAYS),
@@ -72,6 +77,7 @@ def public_limits() -> dict[str, dict[str, float] | float]:
         "price_tolerance_below": _range(0, MAX_SHARE),
         "price_tolerance_above": _range(0, MAX_PRICE_TOLERANCE_ABOVE),
         "weather_multiplier": _range(0, MAX_WEATHER_MULTIPLIER),
+        "customers_per_day": _range(0, MAX_CUSTOMERS_PER_DAY),
         "unit_cost": _range(0, MAX_UNIT_COST),
         "packs": _range(MIN_PACKS, MAX_PACKS),
         "pack_size": _range(MIN_PACK_SIZE, MAX_PACK_SIZE),

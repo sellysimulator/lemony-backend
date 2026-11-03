@@ -336,6 +336,40 @@ def test_day_is_deterministic_and_roundtrips():
     assert LemonadeGame.from_payload(a.to_payload()).to_payload() == a.to_payload()
 
 
+def _crowd(spawn: float) -> GameConfig:
+    data = default_config()
+    data["min_max_values"]["hour"] = {"min": 0, "max": 23}
+    for prefs in data["people_preferences"].values():
+        prefs["spawn_per_hour"] = spawn
+    return GameConfig.model_validate(data)
+
+
+def test_the_saved_game_keeps_no_per_customer_list_so_its_size_ignores_the_crowd():
+    sizes, customers = [], []
+    for spawn in (1, 30):  # up to ~160 and ~4,700 customers a day
+        game = LemonadeGame(_crowd(spawn), seed=4)
+        result = game.run_day(plan())
+        payload = game.to_payload()
+        assert "last_day_events" not in payload and "events" not in json.dumps(payload)
+        # run_day still hands every customer to the caller, once.
+        assert len(result["events"]) == result["record"]["visitors"]
+        customers.append(result["record"]["visitors"])
+        sizes.append(len(json.dumps(payload)))
+    assert customers[1] > 10 * customers[0] and customers[1] > 1000
+    # Only the record's counts gain digits: a few hundred bytes, not one entry per customer.
+    assert sizes[1] - sizes[0] < 400 and sizes[1] < 16_000
+
+
+def test_a_payload_saved_with_the_customer_list_loads_and_drops_it():
+    game = LemonadeGame(cfg(), seed=6)
+    result = game.run_day(plan())
+    old = {**game.to_payload(), "last_day_events": result["events"]}  # saved before the change
+    loaded = LemonadeGame.from_payload(old)
+    assert loaded.days == game.days and loaded.phase == "played"
+    assert "last_day_events" not in loaded.to_payload() and "last_day_events" not in loaded.view()
+    assert loaded.acknowledge_day(1) and loaded.run_day(plan())["events"]
+
+
 def test_overspend_rejected():
     game = LemonadeGame(cfg(starting_cash=5), seed=1)
     with pytest.raises(PlanError, match="only have"):
@@ -365,13 +399,14 @@ def test_stock_out_produces_sold_out():
 
 def test_money_and_inventory_accounting():
     game = LemonadeGame(cfg(), seed=9)
-    rec = game.run_day(plan())["record"]
+    result = game.run_day(plan())
+    rec = result["record"]
     assert rec["spend"] == pytest.approx(12.0)  # four undiscounted 100-packs: 1 + 2 + 5 + 4
     assert rec["cash_end"] == pytest.approx(100 - rec["spend"] + rec["revenue"])
     assert rec["revenue"] == pytest.approx(rec["buyers"] * 0.5)
     assert rec["perished"]["ice"] == 100 - rec["buyers"]  # all remaining ice melts
     assert rec["perished"]["cups"] == 0
-    events = [e["arrive_min"] for e in game.last_day_events]
+    events = [e["arrive_min"] for e in result["events"]]
     assert events == sorted(events)
 
 

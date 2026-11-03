@@ -7,8 +7,9 @@ from fastapi.testclient import TestClient
 
 from app.core.config_model import GameConfig
 from app.core.config_preview import config_help, ingredient_preview
-from app.core.defaults import INGREDIENT_NAMES, default_config
-from app.core.limits import public_limits
+from app.core.defaults import INGREDIENT_NAMES, WEATHER_TYPES, default_config
+from app.core.demand import max_expected_customers
+from app.core.limits import MAX_CUSTOMERS_PER_DAY, public_limits
 from app.main import app
 from app.models.live_game import LiveGame
 from app.services import state_service
@@ -33,6 +34,15 @@ async def connect(sid: str, auth) -> str | None:
 def config(days: int = 2) -> dict:
     c = default_config()
     c["num_days"] = days
+    return c
+
+
+def crowded(days: int = 2) -> dict:
+    """Valid in every rule but the cap on customers a day: ~5,800 on the busiest day."""
+    c = config(days)
+    c["min_max_values"]["hour"] = {"min": 0, "max": 23}
+    for prefs in c["people_preferences"].values():
+        prefs["spawn_per_hour"] = 40
     return c
 
 
@@ -88,10 +98,10 @@ async def test_full_guest_game(emits):
     first = emits.of("day_result")[0]
     assert first["day"] == 1 and not first["duplicate"] and first["state"]["phase"] == "played"
 
-    # duplicate submit returns the stored result, changes nothing
+    # duplicate submit returns the stored record, changes nothing; its customers are not kept
     await game.submit_day("s1", {"game_id": game_id, "day": 1, **PLAN})
     dup = emits.of("day_result")[1]
-    assert dup["duplicate"] and dup["record"] == first["record"]
+    assert dup["duplicate"] and dup["record"] == first["record"] and dup["events"] is None
 
     await game.ack_day("s1", {"game_id": game_id, "day": 1})
     assert emits.of("game_state")[-1]["state"]["phase"] == "planning"
@@ -188,6 +198,45 @@ async def test_a_config_with_a_cleared_or_out_of_range_value_is_refused(
     assert await state_service.state_svc.get_active_game_id(guest) is None
 
 
+@pytest.mark.asyncio
+async def test_create_game_refuses_a_config_over_the_customers_cap(emits):
+    guest = new_guest()
+    await connect("s1", {"guestId": guest})
+    await game.create_game("s1", {"config": crowded()})
+    err = emits.of("error")[-1]
+    assert err["code"] == "INVALID_CONFIG" and "over the limit of 5,000 a day" in err["message"]
+    assert not emits.of("game_created")
+    assert await state_service.state_svc.get_active_game_id(guest) is None
+
+
+@pytest.mark.asyncio
+async def test_a_live_game_stored_over_the_customers_cap_still_loads_and_plays(emits):
+    """The cap applies when a config is created or changed, never to a stored game."""
+    guest = new_guest()
+    await connect("s1", {"guestId": guest})
+    await game.create_game("s1", {"config": config(2)})
+    created = emits.of("game_created")[0]
+    game_id = created["game_id"]
+    # A game created before the cap: its stored config is over it.
+    document = await state_service.state_svc.get_game(game_id)
+    assert document is not None
+    document["engine"]["config"] = crowded(2)
+    document["engine"]["config"]["weather_multipliers"] = {w: 3.0 for w in WEATHER_TYPES}
+    await state_service.state_svc.save_game(document)
+
+    await connect("s2", {"guestId": guest})
+    await game.resume_game("s2", {"game_id": game_id, "session_token": created["session_token"]})
+    state = emits.of("game_state")[-1]["state"]
+    assert state["game_id"] == game_id and state["config"]["weather_multipliers"]["snowy"] == 3
+    await game.submit_day("s2", {"game_id": game_id, "day": 1, **PLAN})
+    result = emits.of("day_result")[-1]
+    assert not emits.of("error") and result["record"]["visitors"] > 0
+    await game.ack_day("s2", {"game_id": game_id, "day": 1})
+    await game.submit_day("s2", {"game_id": game_id, "day": 2, **PLAN, "purchases": {}})
+    assert emits.of("game_finished")[0]["summary"]["days_played"] == 2
+    assert emits.of("game_persisted")[0]["public_id"] == game_id
+
+
 # ---------------------------------------------------------- profile/REST
 @pytest.mark.asyncio
 async def test_signed_in_game_reaches_profile_and_guest_claim(emits, firebase_tokens):
@@ -258,6 +307,7 @@ def test_config_preview_route_gives_the_verdict_and_every_figure():
     res = client.post("/api/v1/config/preview", json=data).json()
     assert res["valid"] is True and res["message"] is None
     parsed = GameConfig.model_validate(data)
+    assert res["customers_per_day"] == max_expected_customers(parsed) == 228
     assert res["help"] == config_help(parsed)
     assert res["ingredients"] == {
         name: ingredient_preview(name, parsed.ingredients[name]) for name in INGREDIENT_NAMES
@@ -272,10 +322,31 @@ def test_an_invalid_config_keeps_each_valid_ingredients_figures_and_no_help():
     res = client.post("/api/v1/config/preview", json=data).json()
     verdict = client.post("/api/v1/config/validate", json=data).json()
     assert res["valid"] is False and res["message"] == verdict["message"]
-    assert res["help"] is None
+    assert res["help"] is None and res["customers_per_day"] is None
     assert res["ingredients"]["sugar"] is None
     lemons = GameConfig.model_validate(default_config()).ingredients["lemons"]
     assert res["ingredients"]["lemons"] == ingredient_preview("lemons", lemons)
+
+
+def test_a_config_over_the_customers_cap_is_refused_with_its_figure():
+    client = TestClient(app)
+    data = crowded()
+    figure = max_expected_customers(GameConfig.validate_uncapped(data))
+    assert figure > MAX_CUSTOMERS_PER_DAY
+    res = client.post("/api/v1/config/preview", json=data).json()
+    verdict = client.post("/api/v1/config/validate", json=data).json()
+    assert res["valid"] is False and res["message"] == verdict["message"]
+    assert res["message"].startswith(f"Up to {figure:,} customers could come on the busiest day")
+    assert "limit of 5,000 a day" in res["message"]
+    # The figure comes with the refusal, so the screen shows how far over it is.
+    assert res["customers_per_day"] == figure and res["help"] is None
+    assert all(res["ingredients"][name] is not None for name in INGREDIENT_NAMES)
+
+    # Lowered to the cap's side, the same traffic fields pass.
+    for prefs in data["people_preferences"].values():
+        prefs["spawn_per_hour"] = 30
+    res = client.post("/api/v1/config/preview", json=data).json()
+    assert res["valid"] is True and 0 < res["customers_per_day"] <= MAX_CUSTOMERS_PER_DAY
 
 
 @pytest.mark.parametrize("body", [{}, {"ingredients": 5}, {"ingredients": {"ice": "cold"}}])

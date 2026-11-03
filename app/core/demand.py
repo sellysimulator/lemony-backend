@@ -9,6 +9,9 @@ Spawn, per hour and person type (the user's "base + preference bonus"):
     expected  = spawn_per_hour * (1 + bonus) * weather_multiplier[weather]
     count     ~ Poisson(expected)
 
+The busiest day a config allows (``max_expected_customers``) is capped at
+``MAX_CUSTOMERS_PER_DAY``: a config over it is refused when it is created or changed.
+
 Buy — the recipe sets what a customer is willing to pay, the price is compared
 against it:
 
@@ -44,8 +47,11 @@ from __future__ import annotations
 import math
 import random
 import statistics
+from functools import partial
 
-from .people import PersonType
+from .config_model import GameConfig
+from .people import PersonType, build_people
+from .weather import temperatures_by_weather
 
 
 def triangle_kernel(current: float, preferred: float, denominator: float) -> float:
@@ -77,6 +83,37 @@ def expected_spawn(
 ) -> float:
     bonus = spawn_bonus(person, hour, weather, temperature)
     return person.spawn_per_hour * (1 + bonus) * weather_multiplier
+
+
+def max_expected_customers(config: GameConfig) -> int:
+    """The most customers one day can expect under ``config``, rounded up to a whole one.
+
+    The worst case, over every weather the config can deal (``temperatures_by_weather``),
+    of the expected arrivals ``run_day`` draws: ``expected_spawn`` summed over every person
+    type and opening hour (``poisson`` draws a count whose mean is that rate).
+
+    A safe upper bound, not always the exact worst day: within a weather, each type is
+    counted at the temperature it likes best (the highest ``temperature_score``) among
+    those that weather comes with, while a real day has one temperature for every type.
+    That never undercounts (``expected_spawn`` grows with the temperature score), and it
+    is exact when the types' best temperatures coincide. It is over by less than a third
+    at worst (the temperature's share of the bonus); on the defaults it is 228 against an
+    exact 225.05. This is the figure the config screen shows and the cap is checked against.
+    """
+    people = build_people(config)
+    hours = range(config.min_max_values.hour.min, config.min_max_values.hour.max + 1)
+    worst = 0.0
+    for weather, temperatures in temperatures_by_weather(config).items():
+        if not temperatures:
+            continue
+        multiplier = config.weather_multipliers[weather]
+        total = 0.0
+        for person in people:
+            best = max(temperatures, key=partial(temperature_score, person))
+            total += sum(expected_spawn(person, hour, weather, best, multiplier) for hour in hours)
+        worst = max(worst, total)
+    # Float noise must not tip a whole number over: 225.00000000001 is 225.
+    return math.ceil(worst - 1e-9)
 
 
 def poisson(rng: random.Random, lam: float) -> int:

@@ -23,6 +23,11 @@ type's and hour's success rate, the refusals per hour and the cups the opening s
 made; ``summarize`` adds the game's success rate, the spoilage value, the traffic per
 hour and the neutral popularity. Each event of a played day carries the running
 sales, the stock left and the cups it still makes, read off the engine's own stock.
+
+The per-customer events are returned by ``run_day`` (and sent once, in ``day_result``)
+but never kept: the payload holds the day records only, so its size does not grow with
+the customers of a day. A payload saved before carries ``last_day_events``; it is
+ignored, and gone on the next save.
 """
 
 from __future__ import annotations
@@ -224,7 +229,6 @@ class LemonadeGame:
             for name in INGREDIENT_NAMES
         }
         self.days: list[dict[str, Any]] = []
-        self.last_day_events: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------ rng
     def _rng(self, day: int, purpose: str) -> random.Random:
@@ -479,8 +483,8 @@ class LemonadeGame:
             "refusal_reasons": reasons,
         }
         self.days.append(record)
-        self.last_day_events = events
         self.phase = "finished" if self.day >= self.config.num_days else "played"
+        # The events go out with this result only: the game keeps no per-customer list.
         return {"record": self.day_records()[-1], "events": events}
 
     def acknowledge_day(self, day: int) -> bool:
@@ -489,7 +493,6 @@ class LemonadeGame:
             return False
         self.day += 1
         self.phase = "planning"
-        self.last_day_events = []
         return True
 
     # --------------------------------------------------------------- views
@@ -535,7 +538,6 @@ class LemonadeGame:
             },
             "suggested_plan": self.suggested_plan(),
             "days": self.day_records(),
-            "last_day_events": self.last_day_events,
             "config": self.config.model_dump(),
             # The bounds the client enforces and shows (packs per size, price step, ...).
             "limits": public_limits(),
@@ -551,12 +553,13 @@ class LemonadeGame:
             "cash": self.cash,
             "inventory": {name: ing.to_dict() for name, ing in self.inventory.items()},
             "days": self.days,
-            "last_day_events": self.last_day_events,
         }
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> LemonadeGame:
-        config = GameConfig.model_validate(payload["config"])
+        # A stored game: every rule but the customers-per-day cap, so a game made before
+        # the cap (or under a looser one) still loads and plays.
+        config = GameConfig.validate_uncapped(payload["config"])
         game = cls(config, int(payload["seed"]))
         game.day = int(payload["day"])
         game.phase = payload["phase"]
@@ -566,5 +569,5 @@ class LemonadeGame:
             for name in INGREDIENT_NAMES
         }
         game.days = list(payload.get("days", []))
-        game.last_day_events = list(payload.get("last_day_events", []))
+        # A payload saved before carries `last_day_events`: ignored, and dropped on the next save.
         return game

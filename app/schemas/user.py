@@ -89,10 +89,15 @@ class ConfigPreviewResponse(BaseModel):
     or null when that ingredient's settings are invalid, so the packs and spoilage keep
     their figures while another part of the config is being fixed. `help` (the figures of
     `config_preview.config_help`) needs the whole config to be valid, else it is null.
+    `customers_per_day` is the most customers one day can expect
+    (`demand.max_expected_customers`, capped at `limits.customers_per_day.max`). It is sent
+    whenever the config is valid apart from that cap, so with `valid: false` it means the
+    cap refused the config (`message` says so); it is null when anything else is invalid.
     """
 
     valid: bool
     message: str | None = None
+    customers_per_day: int | None = None
     ingredients: dict[str, dict[str, Any] | None]
     help: dict[str, Any] | None = None
 

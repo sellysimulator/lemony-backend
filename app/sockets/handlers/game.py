@@ -5,7 +5,7 @@
 | create_game {config, replace?}                 | game_created {game_id, session_token} + game_state (full) |
 | resume_game {game_id?, session_token?}         | game_state (full), or no_active_game      |
 | request_state {game_id}                        | game_state (full)                         |
-| submit_day {game_id, day, purchases, price, recipe} | day_result {day, record, events, duplicate, state (daily)} (+ game_finished, then game_persisted or game_persist_failed, on the last day) |
+| submit_day {game_id, day, purchases, price, recipe} | day_result {day, record, events, duplicate, state (daily)} (+ game_finished, then game_persisted or game_persist_failed, on the last day); `events` is null on a duplicate |
 | ack_day {game_id, day}                         | game_state (daily)                        |
 | retry_persist {game_id}                        | game_persisted {public_id}, or game_persist_failed |
 | abandon_game {game_id}                         | game_abandoned                            |
@@ -13,10 +13,17 @@
 | (any refusal)                                  | error {code, message}                     |
 
 `game_state` is `{seq, full, state}`. A full state carries the history (`days`,
-`last_day_events`, and `summary` once finished); a daily state leaves those out
-so a day's events do not grow with the game. The client appends
-`day_result.record` to the days it holds (only when its day is later than the
-last one held) and takes the summary from `game_finished`. Every resync is full.
+and `summary` once finished); a daily state leaves those out so a day's events do
+not grow with the game. The client appends `day_result.record` to the days it holds
+(only when its day is later than the last one held) and takes the summary from
+`game_finished`. Every resync is full.
+
+The day's customers (`events`, one per visitor, in arrival order) are sent once, in
+the `day_result` of the submission that played the day, and never stored: no state
+carries them (`last_day_events` is gone), and a duplicate `day_result` (a day sent
+again) has `events: null`, meaning "not available". The client then skips the replay
+and opens that day's report; a resume while a day is `played` but not acknowledged
+does the same.
 
 Every server event carries a monotonic per-game `seq`, except `plan_preview`, a
 request-scoped reply that is not a state event. `session_token` is sent
