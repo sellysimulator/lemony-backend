@@ -58,8 +58,9 @@ else from the template needs the user's explicit OK.
 - **`app/core/` engine modules are pure** (`engine`, `demand`, `people`, `weather`,
   `ingredients`, `defaults`, `config_model`, `money`, `limits`, `preview`, `config_preview`,
   `plans`): stdlib + pydantic only, no settings,
-  services, DB or I/O. `core/firebase.py` and `core/checks/` are *not* pure (they read
-  settings) — the "pure" rule applies to the engine modules, not the package.
+  services, DB or I/O. `core/firebase.py` and `core/checks/` (they read settings) and
+  `core/abuse.py` (ASGI rate limiting) are *not* pure — the "pure" rule applies to the
+  engine modules, not the package.
 - **`LemonadeGame`** (`core/engine.py`) is rebuilt from its JSON payload on every service
   call and serialised back. Phases: `planning → played → (ack) → planning … → finished`.
 - **`services/game_service.py` is the only code that mutates a live game document.** It
@@ -145,9 +146,15 @@ else from the template needs the user's explicit OK.
   and `cash_after`, with no RNG beyond today's weather. There is no best price. The
   `preview_plan` handler answers with `plan_preview` (no `seq`, no lock, no save, refusals
   inside the reply; a bad price is a `price_error`, not a refusal) and drops more than
-  `PREVIEW_LIMIT` (5) requests per second per sid.
+  `PREVIEW_LIMIT` (5) requests per second per sid (`core/abuse.py` `preview_limiter`,
+  through `@guarded(per_sid=...)`).
 - **`services/state_service.py` + `state_backend.py`**: keys `game:<id>`, `active:<identity>`,
-  locks `lock:game:<id>` / `lock:active:<identity>`, TTL `GAME_TTL_SECONDS`.
+  locks `lock:game:<id>` / `lock:active:<identity>`, TTL `GAME_TTL_SECONDS` (a guest's: at most
+  `GUEST_GAME_TTL_SECONDS`, 2 days). Expired `live_games` rows go when read, at startup, and
+  in a sweep `create_game` triggers at most every `PURGE_EVERY_SECONDS` (10 min). Process locks
+  are weakly held (gone once released), and a client `game_id` that is not 32 lowercase hex
+  is refused as `NO_GAME` (`game_service.checked_game_id`) before any lock is taken
+  (`require_owned`, which `preview_plan` uses, checks it before the store is read).
 - **Auto-discovery everywhere.** A new REST router (module exporting `router` in
   `app/api/v1/`), socket handler module (`app/sockets/handlers/`), startup check
   (`app/core/checks/`, `register_check`) or model module (`app/models/`) is picked up by
@@ -282,6 +289,18 @@ decimals.
   `app` is imported; tables are recreated per test; no Redis, `.env` never read.
   `asyncio_mode = strict` → every async test needs `@pytest.mark.asyncio`. A change to the
   Redis backend needs a manual smoke test against a real Redis.
+- **Abuse limits live in `app/core/abuse.py`**, as plain constants (no env knobs), in
+  process memory (one instance). REST: `AbuseLimitMiddleware`, added *before* CORS in
+  `main.py` so a 429 keeps its CORS headers. Sockets: open sockets and connects per address
+  in `SocketManager.connect` (checked before the token is verified); events per sid,
+  `preview_plan` per sid (`@guarded(per_sid=preview_limiter)`, dropped unanswered) and
+  `create_game` per address (`@guarded(per_ip=create_game_limiter)`), in `guarded()`. A new
+  limit is a `RateLimiter` in `abuse.py` passed to `guarded`, never a handler's own counter;
+  a sid-keyed one goes in `SID_LIMITERS` so a disconnect forgets it. The
+  client address is the `cf-connecting-ip` header (Render fronts services with Cloudflare,
+  which overwrites it), else the RIGHTMOST `X-Forwarded-For` entry (Render appends it):
+  `request.client` is forgeable because the Dockerfile trusts every proxy
+  (`FORWARDED_ALLOW_IPS=*`). Tests start from zero counts (autouse `fresh_limits`).
 - **Guest ids are bearer secrets.** Anyone holding one controls that guest's live game and
   can `POST /games/claim` its finished games. Known and accepted; don't widen it.
 - Deps are pinned exactly (`==`); `anyio` arrives transitively.
@@ -289,7 +308,7 @@ decimals.
 ## Deploy
 
 `render.yaml`: one Docker web service `lemony-backend`, health check `/api/v1/health`
-(`/health/deep` for DB/Redis readiness, always HTTP 200), `preDeployCommand: alembic upgrade
+(`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `preDeployCommand: alembic upgrade
 head`, `REDIS_ENABLED=false`, CORS `https://lemonysim.web.app` + localhost.
 
 `autoDeployTrigger: checksPass` makes `.github/workflows/ci.yml` the deploy gate: a push

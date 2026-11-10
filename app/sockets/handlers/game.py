@@ -41,18 +41,21 @@ when the write failed (the client offers a retry, `retry_persist`; `resume_game`
 retries too). `create_game` retries the save of a finished, unsaved active game
 first and refuses with `UNSAVED_GAME` if it still fails, so no finished game is
 left behind unsaved.
+
+Rate limits (`core/abuse.py`, applied by `guarded()`): past 20 events a second a
+sid's events are dropped unanswered, and so are its `preview_plan` requests past 5 a
+second; past 60 `create_game` a minute from one address, `create_game` is answered
+with `error {code: "RATE_LIMITED", message}`.
 """
 
 from __future__ import annotations
 
 import logging
-import time
-from collections import deque
-from collections.abc import Callable
 from typing import Any
 
 from pydantic import ValidationError
 
+from ...core.abuse import create_game_limiter, preview_limiter
 from ...core.engine import DayPlan, PlanError
 from ...core.preview import plan_preview
 from ...services import game_service as gs
@@ -60,13 +63,6 @@ from ..errors import guarded
 from ..manager import sio, socket_manager
 
 logger = logging.getLogger(__name__)
-
-# At most PREVIEW_LIMIT preview_plan requests per PREVIEW_WINDOW seconds per sid, counted on
-# arrival (refused ones too). The excess gets no reply. Tests patch PREVIEW_CLOCK.
-PREVIEW_LIMIT = 5
-PREVIEW_WINDOW = 1.0
-PREVIEW_CLOCK: Callable[[], float] = time.monotonic
-_preview_times: dict[str, deque[float]] = {}
 
 
 def _identity(sid: str) -> str | None:
@@ -109,7 +105,7 @@ def _payload(data: Any) -> dict[str, Any]:
 
 
 @sio.event
-@guarded()
+@guarded(per_ip=create_game_limiter)
 async def create_game(sid: str, data: Any = None) -> None:
     identity = _identity(sid)
     if identity is None:
@@ -242,26 +238,13 @@ async def abandon_game(sid: str, data: Any = None) -> None:
     await socket_manager.emit_to_sid(sid, "game_abandoned", {"seq": 0, "game_id": game_id})
 
 
-def _preview_allowed(sid: str) -> bool:
-    now = PREVIEW_CLOCK()
-    for key in list(_preview_times):
-        stamps = _preview_times[key]
-        while stamps and now - stamps[0] >= PREVIEW_WINDOW:
-            stamps.popleft()
-        if not stamps:
-            del _preview_times[key]
-    stamps = _preview_times.setdefault(sid, deque())
-    stamps.append(now)
-    return len(stamps) <= PREVIEW_LIMIT
-
-
 @sio.event
-@guarded()
+@guarded(per_sid=preview_limiter)
 async def preview_plan(sid: str, data: Any = None) -> None:
+    # At most PREVIEW_LIMIT (5) a second per sid, counted on arrival (refused ones too);
+    # `guarded` drops the excess unanswered.
     identity = _identity(sid)
     if identity is None:
-        return
-    if not _preview_allowed(sid):
         return
     payload = _payload(data)
     request_id = payload.get("request_id")

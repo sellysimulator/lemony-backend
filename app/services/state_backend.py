@@ -21,6 +21,7 @@ between them is a deployment choice, never a behavioural one.
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, Self
@@ -74,7 +75,10 @@ class SqlStateBackend:
 
     def __init__(self, session_factory: Callable[[], Session] | None = None) -> None:
         self._session_factory = session_factory
-        self._locks: dict[str, asyncio.Lock] = {}
+        # Weak values: a key's lock lives only while a `_ProcessLock` holds or awaits
+        # it, so keys nobody uses any more (finished games, ids a client made up)
+        # never pile up in memory.
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     def _session(self) -> Session:
         if self._session_factory is None:
@@ -134,10 +138,7 @@ class SqlStateBackend:
     async def delete(self, *keys: str) -> int:
         if not keys:
             return 0
-        removed = await anyio.to_thread.run_sync(self._delete_sync, keys)
-        for key in keys:
-            self._locks.pop(key, None)
-        return removed
+        return await anyio.to_thread.run_sync(self._delete_sync, keys)
 
     async def exists(self, key: str) -> int:
         return 1 if await self.get(key) is not None else 0

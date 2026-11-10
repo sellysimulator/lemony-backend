@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 _BEARER_PREFIX = "Bearer "
 
+#: A Firebase ID token is about 1 KB. Anything longer is refused before it is
+#: parsed, so an oversized token costs nothing to reject.
+MAX_ID_TOKEN_LENGTH = 4096
+
 _MISSING_TOKEN_DETAIL = "Missing bearer token."
 _INVALID_TOKEN_DETAIL = "Invalid or expired token."
 _UNCONFIGURED_DETAIL = "Firebase authentication is not configured on this server."
@@ -33,7 +37,7 @@ def verify_firebase_id_token(token: str) -> dict | None:
     invalid token, because failing open reinstates the impersonation bug the
     three-identifier model exists to prevent.
     """
-    if not token:
+    if not token or not isinstance(token, str) or len(token) > MAX_ID_TOKEN_LENGTH:
         return None
 
     app = init_firebase()

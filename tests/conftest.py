@@ -38,6 +38,18 @@ def fresh_db():
     yield
 
 
+@pytest.fixture(autouse=True)
+def fresh_limits():
+    """Rate-limit counts and open-socket counts start at zero in every test."""
+    from app.core import abuse
+    from app.sockets.manager import socket_manager
+
+    abuse.reset()
+    socket_manager.sid_to_ip.clear()
+    socket_manager.sockets_per_ip.clear()
+    yield
+
+
 class Recorder:
     def __init__(self) -> None:
         self.events: list[tuple[str, str, Any]] = []
