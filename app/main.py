@@ -59,6 +59,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Retry-After"],  # lets the browser read a 429's wait time
 )
 
 for _router in all_routers():

@@ -35,6 +35,7 @@ def test_a_heavy_route_answers_429_past_its_limit(monkeypatch: pytest.MonkeyPatc
     assert refused.json() == {"detail": abuse.RATE_LIMITED_MESSAGE}
     assert refused.headers["retry-after"] == "60"
     assert refused.headers["access-control-allow-origin"] == origin
+    assert "retry-after" in refused.headers["access-control-expose-headers"].lower()
     # a forged leftmost entry changes nothing; another real address is counted apart
     other = {"X-Forwarded-For": "1.1.1.1, 2.2.2.2"}
     assert client.post("/api/v1/config/validate", json={}, headers=other).status_code == 200
