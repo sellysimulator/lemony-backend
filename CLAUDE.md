@@ -301,6 +301,9 @@ decimals.
   which overwrites it), else the RIGHTMOST `X-Forwarded-For` entry (Render appends it):
   `request.client` is forgeable because the Dockerfile trusts every proxy
   (`FORWARDED_ALLOW_IPS=*`). Tests start from zero counts (autouse `fresh_limits`).
+  Chunked bodies (no `Content-Length`) are counted toward the 64 KB REST cap, and the first
+  request from each IP source logs `client ip source: …` (no IP) so the deployment's header
+  can be checked in Render's logs.
 - **Guest ids are bearer secrets.** Anyone holding one controls that guest's live game and
   can `POST /games/claim` its finished games. Known and accepted; don't widen it.
 - Deps are pinned exactly (`==`); `anyio` arrives transitively.

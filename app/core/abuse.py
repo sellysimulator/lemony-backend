@@ -8,7 +8,9 @@ The limits are plain constants: change them here.
 Where they apply:
 - REST: `AbuseLimitMiddleware`, added in `app/main.py`. Every request counts against
   `REST_LIMIT` per address, requests to `HEAVY_PATHS` against `HEAVY_LIMIT` as well, and
-  a body declared larger than `MAX_BODY_BYTES` is refused unread. 429 / 413, JSON `detail`.
+  a body larger than `MAX_BODY_BYTES` is refused: unread when its `Content-Length` says
+  so, else (a chunked body has none) once the bytes read pass the cap. 429 / 413, JSON
+  `detail`.
 - Socket.IO: `SocketManager.connect` (open sockets and connects per address) and
   `guarded()` (events per sid, and `preview_plan` per sid, dropped unanswered;
   `create_game` per address, answered with `error {code: "RATE_LIMITED"}`).
@@ -17,11 +19,14 @@ Where they apply:
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------- REST
 REST_LIMIT = 600  # requests per address per REST_WINDOW, any REST route
@@ -117,6 +122,8 @@ create_game_limiter = RateLimiter(CREATE_GAME_LIMIT, CREATE_GAME_WINDOW)
 preview_limiter = RateLimiter(PREVIEW_LIMIT, PREVIEW_WINDOW)
 #: Keyed on sid: `SocketManager.disconnect` forgets the sid in each.
 SID_LIMITERS = (event_limiter, preview_limiter)
+#: Which branch of `client_ip` answered, each logged once per process (never the address).
+_logged_ip_sources: set[str] = set()
 
 
 def reset() -> None:
@@ -130,6 +137,13 @@ def reset() -> None:
         preview_limiter,
     ):
         limiter.clear()
+    _logged_ip_sources.clear()
+
+
+def _log_ip_source(source: str) -> None:
+    if source not in _logged_ip_sources:
+        _logged_ip_sources.add(source)
+        logger.info("client ip source: %s", source)
 
 
 def client_ip(scope: Mapping[str, Any]) -> str:
@@ -143,12 +157,16 @@ def client_ip(scope: Mapping[str, Any]) -> str:
     one a client cannot forge. uvicorn's `--proxy-headers` with `FORWARDED_ALLOW_IPS=*`
     puts the LEFTMOST, forgeable entry into `scope["client"]`, so that is only the
     fallback, for a request that came through no proxy (local dev).
+
+    The first answer from each branch logs `client ip source: …` (the branch, never the
+    address), so the deployment's header can be checked in its logs.
     """
     headers = scope.get("headers") or ()
     for name, value in headers:
         if name.lower() == b"cf-connecting-ip":
             cf = value.decode("latin-1").strip()
             if cf:
+                _log_ip_source("cf-connecting-ip")
                 return cf[:64]
     forwarded = [
         value.decode("latin-1") for name, value in headers if name.lower() == b"x-forwarded-for"
@@ -157,7 +175,11 @@ def client_ip(scope: Mapping[str, Any]) -> str:
         entries = [e.strip() for e in ",".join(forwarded).split(",")]
         last = next((e for e in reversed(entries) if e), "")
         if last:
+            # The client picks how many entries it sends: cap the label so it stays bounded.
+            count = sum(1 for e in entries if e)
+            _log_ip_source(f"x-forwarded-for ({count if count <= 3 else '3+'} entries)")
             return last[:64]
+    _log_ip_source("peer")
     client = scope.get("client")
     return str(client[0]) if client else UNKNOWN_IP
 
@@ -170,6 +192,23 @@ def _declared_length(scope: Scope) -> int:
             except ValueError:
                 return 0
     return 0
+
+
+async def _read_body(receive: Receive) -> tuple[list[Message], bool]:
+    """The request's messages up to the end of its body, and whether that body is over
+    `MAX_BODY_BYTES`. A chunked body has no `Content-Length`: its cap holds here."""
+    messages: list[Message] = []
+    size = 0
+    while True:
+        message = await receive()
+        messages.append(message)
+        if message["type"] != "http.request":
+            return messages, False
+        size += len(message.get("body", b""))
+        if size > MAX_BODY_BYTES:
+            return messages, True
+        if not message.get("more_body", False):
+            return messages, False
 
 
 async def _reply(send: Send, status: int, detail: str) -> None:
@@ -203,4 +242,12 @@ class AbuseLimitMiddleware:
         if _declared_length(scope) > MAX_BODY_BYTES:
             await _reply(send, 413, TOO_LARGE_MESSAGE)
             return
-        await self.app(scope, receive, send)
+        messages, too_large = await _read_body(receive)
+        if too_large:
+            await _reply(send, 413, TOO_LARGE_MESSAGE)
+            return
+
+        async def replay() -> Message:
+            return messages.pop(0) if messages else await receive()
+
+        await self.app(scope, replay, send)
