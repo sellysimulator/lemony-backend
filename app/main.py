@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from .api.v1 import all_routers
 from .config import settings
+from .core.abuse import AbuseLimitMiddleware
 from .core.checks import run_startup_checks
 from .sockets import handlers  # noqa: F401  — discovery registers socket events
 from .sockets.manager import sio
@@ -50,12 +51,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Added before CORS, so CORS wraps it and a 429 still carries the CORS headers.
+app.add_middleware(AbuseLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Retry-After"],  # lets the browser read a 429's wait time
 )
 
 for _router in all_routers():

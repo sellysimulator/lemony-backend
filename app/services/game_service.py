@@ -15,6 +15,7 @@ from __future__ import annotations
 import hmac
 import logging
 import random
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -56,6 +57,19 @@ def parse_config(data: Any) -> GameConfig:
 
 def _now() -> str:
     return datetime.now(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+NO_GAME_MESSAGE = "That game does not exist or is not yours."
+
+# Every game id is `uuid4().hex`.
+_GAME_ID_RE = re.compile(r"[0-9a-f]{32}")
+
+
+def checked_game_id(value: Any) -> str:
+    """A client-sent game id, refused as NO_GAME before any lock is taken for it."""
+    if not isinstance(value, str) or not _GAME_ID_RE.fullmatch(value):
+        raise GameError("NO_GAME", NO_GAME_MESSAGE)
+    return value
 
 
 def _same(a: str | None, b: str | None) -> bool:
@@ -108,6 +122,7 @@ async def create_game(identity: str, config_data: Any, replace: bool = False) ->
     still fails.
     """
     config = parse_config(config_data)
+    await state_svc.purge_expired()
     async with state_svc.identity_lock(identity):
         active_id = await state_svc.get_active_game_id(identity)
         if active_id:
@@ -168,9 +183,9 @@ async def load_owned(
 
 
 async def require_owned(identity: str, game_id: Any) -> dict[str, Any]:
-    document = await load_owned(identity, game_id if isinstance(game_id, str) else None)
-    if document is None or not game_id:
-        raise GameError("NO_GAME", "That game does not exist or is not yours.")
+    document = await load_owned(identity, checked_game_id(game_id))
+    if document is None:
+        raise GameError("NO_GAME", NO_GAME_MESSAGE)
     return document
 
 
@@ -186,7 +201,7 @@ async def submit_day(
     """
     game_id = data.get("game_id")
     day = data.get("day")
-    async with state_svc.lock(str(game_id)):
+    async with state_svc.lock(checked_game_id(game_id)):
         document = await require_owned(identity, game_id)
         engine = engine_of(document)
         if not isinstance(day, int):
@@ -214,7 +229,7 @@ async def submit_day(
 
 
 async def acknowledge_day(identity: str, game_id: Any, day: Any) -> dict[str, Any]:
-    async with state_svc.lock(str(game_id)):
+    async with state_svc.lock(checked_game_id(game_id)):
         document = await require_owned(identity, game_id)
         engine = engine_of(document)
         if isinstance(day, int) and engine.acknowledge_day(day):
@@ -224,7 +239,7 @@ async def acknowledge_day(identity: str, game_id: Any, day: Any) -> dict[str, An
 
 
 async def abandon_game(identity: str, game_id: Any) -> None:
-    async with state_svc.lock(str(game_id)):
+    async with state_svc.lock(checked_game_id(game_id)):
         document = await require_owned(identity, game_id)
         await state_svc.delete_game(document["game_id"])
     async with state_svc.identity_lock(identity):

@@ -2,8 +2,8 @@
 
 Refusals must look exactly like `submit_day`'s (same code, same message) but travel
 inside the reply, never as an `error` event. The reply goes to the asking sid only,
-carries no `seq`, and changes nothing. The limiter is module-global, so every test
-uses its own sids.
+carries no `seq`, and changes nothing. The rate limit is `core/abuse.py`'s
+`preview_limiter`, applied by `guarded(per_sid=...)`; counts start at zero in every test.
 """
 
 from __future__ import annotations
@@ -14,14 +14,16 @@ from typing import Any
 
 import pytest
 
+from app.core import abuse
+from app.core.abuse import PREVIEW_LIMIT, PREVIEW_WINDOW
 from app.core.defaults import default_config
 from app.core.engine import DayPlan
 from app.core.preview import plan_preview
 from app.services import game_service as gs
 from app.services import state_service
 from app.sockets.handlers import connection, game
-from app.sockets.handlers.game import PREVIEW_LIMIT, PREVIEW_WINDOW, preview_plan
-from app.sockets.manager import sio
+from app.sockets.handlers.game import preview_plan
+from app.sockets.manager import sio, socket_manager
 
 from ..conftest import Recorder, new_guest
 
@@ -381,7 +383,7 @@ async def test_a_finished_game_is_wrong_day(emits):
 @pytest.fixture
 def clock(monkeypatch) -> list[float]:
     now = [100.0]
-    monkeypatch.setattr(game, "PREVIEW_CLOCK", lambda: now[0])
+    monkeypatch.setattr(abuse.preview_limiter, "clock", lambda: now[0])
     return now
 
 
@@ -440,6 +442,16 @@ async def test_other_events_are_not_limited(emits, clock):
     emits.events.clear()
     await game.request_state(sid, {"game_id": game_id})
     assert emits.of("game_state")
+
+
+@pytest.mark.asyncio
+async def test_a_disconnect_forgets_the_sid_count(emits, clock):
+    sid, _, game_id = await start(emits)
+    for i in range(PREVIEW_LIMIT):
+        await preview_plan(sid, request(game_id, request_id=f"r{i}"))
+    assert len(abuse.preview_limiter) == 1
+    await socket_manager.disconnect(sid)
+    assert len(abuse.preview_limiter) == 0
 
 
 def test_the_handler_is_registered_as_a_socket_event():

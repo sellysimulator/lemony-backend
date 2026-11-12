@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import anyio.to_thread
 import redis.asyncio as aioredis
@@ -19,6 +20,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/health", tags=["health"])
 
 _CHECK_TIMEOUT_SECONDS = 5.0
+_DEEP_CACHE_SECONDS = 15.0
+
+# (monotonic time it was taken, answer): the last `/health/deep` answer.
+_deep_cache: tuple[float, DeepHealthResponse] | None = None
 
 
 class HealthResponse(BaseModel):
@@ -102,12 +107,22 @@ async def health() -> HealthResponse:
 
 @router.get("/deep", response_model=DeepHealthResponse)
 async def health_deep() -> DeepHealthResponse:
-    """Readiness probe. Reports each backing service, always with HTTP 200."""
+    """Readiness probe. Reports each backing service, always with HTTP 200.
+
+    The answer is reused for `_DEEP_CACHE_SECONDS`, so however often it is called
+    the probes open at most one database (and Redis) connection per period.
+    """
+    global _deep_cache
+    now = time.monotonic()
+    if _deep_cache is not None and now - _deep_cache[0] < _DEEP_CACHE_SECONDS:
+        return _deep_cache[1]
     database_ok = await _database_reachable()
     redis_ok = await _redis_reachable()
-    return DeepHealthResponse(
+    response = DeepHealthResponse(
         status="ok" if database_ok and redis_ok else "degraded",
         database=database_ok,
         redis=redis_ok,
         state_backend="redis" if settings.REDIS_ENABLED else "database",
     )
+    _deep_cache = (time.monotonic(), response)
+    return response
