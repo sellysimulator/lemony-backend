@@ -118,7 +118,8 @@ async def test_a_guest_game_gets_the_guest_ttl(emits: Any) -> None:
     with SessionLocal() as db:
         row = db.get(LiveGame, f"game:{game_id}")
         assert row is not None and row.expires_at is not None
-        left = (row.expires_at - datetime.now(UTC).replace(tzinfo=None)).total_seconds()
+        expires = row.expires_at.replace(tzinfo=UTC)  # SQLite hands it back naive (UTC)
+        left = (expires - datetime.now(UTC)).total_seconds()
     assert state_service.ttl_for(guest) <= state_service.GUEST_GAME_TTL_SECONDS
     assert abs(left - state_service.ttl_for(guest)) < 60
     assert state_service.ttl_for("uid-1") == settings.GAME_TTL_SECONDS
@@ -134,7 +135,7 @@ async def test_expired_live_games_are_swept_at_most_once_a_period(
     with SessionLocal() as db:
         row = db.get(LiveGame, "game:stale")
         assert row is not None
-        row.expires_at = datetime(2000, 1, 1)  # noqa: DTZ001 — column is naive UTC
+        row.expires_at = datetime(2000, 1, 1, tzinfo=UTC)
         db.commit()
     monkeypatch.setattr(state_service.state_svc, "_last_purge", float("-inf"))
     await state_service.state_svc.purge_expired()

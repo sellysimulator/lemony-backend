@@ -25,6 +25,7 @@ from pydantic import ValidationError
 
 from ..core.config_model import GameConfig
 from ..core.engine import DayPlan, LemonadeGame, PlanError
+from ..schemas.types import utc_z
 from . import db_service
 from .state_service import SCHEMA_VERSION, state_svc
 
@@ -56,7 +57,8 @@ def parse_config(data: Any) -> GameConfig:
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
+    """Now, to the second, as ISO-8601 UTC with a `Z` (the document's timestamps)."""
+    return utc_z(datetime.now(UTC).replace(microsecond=0))
 
 
 NO_GAME_MESSAGE = "That game does not exist or is not yours."
@@ -259,7 +261,7 @@ async def bump_seq(document: dict[str, Any]) -> int:
 
 # ------------------------------------------------------------------- persist
 async def persist_if_finished(document: dict[str, Any]) -> str | None:
-    """Write a finished, not-yet-persisted game to MySQL. Safe to call repeatedly.
+    """Write a finished, not-yet-persisted game to the database. Safe to call repeatedly.
 
     Returns the public id once the game is saved, else None (not finished, or the
     write failed and the document keeps `persisted: false`).

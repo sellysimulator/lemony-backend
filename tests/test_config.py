@@ -1,13 +1,13 @@
-"""TLS on the MySQL connection: ``Settings.db_connect_args`` and the boot log."""
+"""The PostgreSQL connection: ``Settings.db_url``, ``Settings.db_connect_args`` (UTC
+sessions, TLS) and the boot log."""
 
 import logging
-import ssl
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
-import pymysql  # type: ignore[import-untyped]
 import pytest
-from pymysql.constants import CLIENT  # type: ignore[import-untyped]
+from sqlalchemy.engine import make_url
 
 from app.config import Settings
 from app.core.checks import db_tls_check
@@ -29,12 +29,12 @@ KZ781IJHaBK1rqXuL8CPgjD3c3nx86yO47mExA==
 """
 
 # Every form DB_SSL_CA accepts: a path, the PEM text as Render stores it, and
-# the one-line `\n`-escaped text a `.env` holds.
+# the one-line `\n`-escaped text a dotenv file holds.
 _CA_FORMS = ["path", "pem", "pem-one-line"]
 
 
-def _mysql_settings(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> Settings:
-    """Settings from declared defaults only, pointed at MySQL rather than the
+def _pg_settings(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> Settings:
+    """Settings from declared defaults only, pointed at PostgreSQL rather than the
     suite's SQLite override."""
     for name in Settings.model_fields:
         monkeypatch.delenv(name, raising=False)
@@ -53,33 +53,68 @@ def _ca_value(form: str, tmp_path: Path) -> str:
     return ""
 
 
+def test_url_is_psycopg_with_the_postgres_defaults(monkeypatch):
+    url = make_url(_pg_settings(monkeypatch).db_url)
+    assert url.drivername == "postgresql+psycopg"
+    assert (url.username, url.host, url.port, url.database) == (
+        "postgres",
+        "localhost",
+        5432,
+        "lemony",
+    )
+
+
+@pytest.mark.parametrize("password", ["p@ss:w/rd%41?#", "100%", "plain"])
+def test_credentials_are_percent_encoded(monkeypatch, password):
+    s = _pg_settings(monkeypatch, DB_USER="app@lemony", DB_PASSWORD=password, DB_HOST="db.x")
+    raw = s.db_url.split("://", 1)[1].rsplit("@", 1)[0]
+    user, encoded = raw.split(":", 1)
+    assert "@" not in raw and unquote(user) == "app@lemony" and unquote(encoded) == password
+    url = make_url(s.db_url)
+    assert (url.username, url.password, url.host) == ("app@lemony", password, "db.x")
+
+
 def test_tls_is_required_by_default(monkeypatch):
-    s = _mysql_settings(monkeypatch)
+    s = _pg_settings(monkeypatch)
     assert s.DB_REQUIRE_SSL is True
-    assert isinstance(s.db_connect_args["ssl"], ssl.SSLContext)
+    assert s.db_connect_args == {"options": "-c timezone=UTC", "sslmode": "require"}
 
 
-def test_no_tls_args_when_switched_off(monkeypatch):
-    assert _mysql_settings(monkeypatch, DB_REQUIRE_SSL=False).db_connect_args == {}
+def test_sessions_always_run_in_utc(monkeypatch):
+    s = _pg_settings(monkeypatch, DB_REQUIRE_SSL=False)
+    assert s.db_connect_args == {"options": "-c timezone=UTC"}
 
 
-def test_sqlite_gets_no_tls_args(monkeypatch):
-    s = _mysql_settings(monkeypatch, DB_URL_OVERRIDE="sqlite:///x.db")
-    assert s.db_connect_args == {"check_same_thread": False}
+@pytest.mark.parametrize(
+    "url", ["sqlite:///x.db", "sqlite://", "postgres-not-a-url", "oracle://u:p@h/d"]
+)
+def test_non_postgres_urls_get_no_connect_args(monkeypatch, url):
+    assert _pg_settings(monkeypatch, DB_URL_OVERRIDE=url).db_connect_args == {}
 
 
-def test_without_a_ca_the_link_is_encrypted_but_unverified(monkeypatch):
-    ctx = _mysql_settings(monkeypatch).db_connect_args["ssl"]
-    assert ctx.verify_mode == ssl.CERT_NONE
-    assert ctx.check_hostname is False
+def test_a_postgres_override_gets_the_postgres_args(monkeypatch):
+    s = _pg_settings(monkeypatch, DB_URL_OVERRIDE="postgresql+psycopg://u:p@h:5432/d")
+    assert s.db_url == "postgresql+psycopg://u:p@h:5432/d"
+    assert s.db_connect_args["options"] == "-c timezone=UTC"
 
 
 @pytest.mark.parametrize("form", _CA_FORMS)
-def test_with_a_ca_the_server_is_verified_against_it(monkeypatch, tmp_path, form):
-    ctx = _mysql_settings(monkeypatch, DB_SSL_CA=_ca_value(form, tmp_path)).db_connect_args["ssl"]
-    assert ctx.verify_mode == ssl.CERT_REQUIRED
-    assert ctx.check_hostname is True
-    assert ctx.cert_store_stats()["x509_ca"] == 1
+@pytest.mark.parametrize("require", [True, False])
+def test_with_a_ca_the_server_is_verified_against_it(monkeypatch, tmp_path, form, require):
+    s = _pg_settings(monkeypatch, DB_SSL_CA=_ca_value(form, tmp_path), DB_REQUIRE_SSL=require)
+    args = s.db_connect_args
+    assert args["sslmode"] == "verify-full"
+    assert args["options"] == "-c timezone=UTC"
+    root = Path(args["sslrootcert"])
+    assert root.is_file()
+    assert root.read_text().strip() == _TEST_CA_PEM.strip()
+    if form == "path":
+        assert root == tmp_path / "ca.pem"  # a path is passed through as is
+
+
+def test_pem_text_is_written_once_per_value(monkeypatch):
+    s = _pg_settings(monkeypatch, DB_SSL_CA=_TEST_CA_PEM)
+    assert s.db_connect_args["sslrootcert"] == s.db_connect_args["sslrootcert"]
 
 
 @pytest.mark.parametrize(
@@ -90,22 +125,9 @@ def test_with_a_ca_the_server_is_verified_against_it(monkeypatch, tmp_path, form
     ],
 )
 def test_an_unloadable_ca_fails_loudly(monkeypatch, bad):
-    s = _mysql_settings(monkeypatch, DB_SSL_CA=bad)
+    s = _pg_settings(monkeypatch, DB_SSL_CA=bad)
     with pytest.raises(ValueError, match="DB_SSL_CA"):
         _ = s.db_connect_args
-
-
-@pytest.mark.parametrize("form", ["none", *_CA_FORMS])
-def test_pymysql_refuses_plaintext_with_these_connect_args(monkeypatch, tmp_path, form):
-    """PyMySQL sets ``CLIENT.SSL`` up front only in REQUIRED mode; in PREFERRED
-    mode it silently drops to plaintext if the server offers no TLS. An empty
-    ``ssl`` dict lands in PREFERRED mode, which is why the args carry an
-    ``SSLContext``."""
-    s = _mysql_settings(monkeypatch, DB_SSL_CA=_ca_value(form, tmp_path))
-    conn = pymysql.connections.Connection(
-        host="db.example.com", defer_connect=True, **s.db_connect_args
-    )
-    assert conn.client_flag & CLIENT.SSL
 
 
 @pytest.mark.parametrize(
@@ -114,6 +136,7 @@ def test_pymysql_refuses_plaintext_with_these_connect_args(monkeypatch, tmp_path
         (False, "", logging.WARNING, "DB_REQUIRE_SSL is false"),
         (True, "", logging.WARNING, "NOT verified"),
         (True, _TEST_CA_PEM, logging.INFO, "verified against DB_SSL_CA"),
+        (False, _TEST_CA_PEM, logging.INFO, "verified against DB_SSL_CA"),
     ],
 )
 def test_boot_log_says_how_the_db_link_is_protected(monkeypatch, caplog, require, ca, level, text):
@@ -125,9 +148,28 @@ def test_boot_log_says_how_the_db_link_is_protected(monkeypatch, caplog, require
     [record] = [r for r in caplog.records if r.name == db_tls_check.logger.name]
     assert record.levelno == level
     assert text in record.getMessage()
+    assert "PostgreSQL" in record.getMessage()
 
 
 def test_boot_log_is_silent_on_sqlite(caplog):
     with caplog.at_level(logging.INFO, logger=db_tls_check.logger.name):
         db_tls_check.check_db_tls()
     assert not [r for r in caplog.records if r.name == db_tls_check.logger.name]
+
+
+def test_pool_is_sized_for_a_20_connection_plan(monkeypatch):
+    s = _pg_settings(monkeypatch)
+    assert (s.DB_POOL_SIZE, s.DB_MAX_OVERFLOW) == (3, 1)
+    # One shared 20-connection service: Selly, Pulky and Beery at 3 each, Lemony,
+    # plus a deploy's second instance of the largest (4), alembic and one psql (2).
+    lemony = s.DB_POOL_SIZE + s.DB_MAX_OVERFLOW
+    assert 3 * 3 + lemony + max(3, lemony) + 2 <= 20
+
+
+def test_pool_size_comes_from_the_environment(monkeypatch):
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DB_POOL_SIZE", "12")
+    monkeypatch.setenv("DB_MAX_OVERFLOW", "4")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert (s.DB_POOL_SIZE, s.DB_MAX_OVERFLOW) == (12, 4)

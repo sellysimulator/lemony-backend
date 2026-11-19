@@ -9,19 +9,18 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-from sqlalchemy import create_engine, pool
+from sqlalchemy import Connection, create_engine, pool
 
 from alembic import context
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.config import settings
-from app.db.base import Base
-
 # Populates `Base.metadata`: importing the package imports every model module.
 # Without this the metadata is empty here and autogenerate would propose
 # dropping every table that exists.
-import app.models  # noqa: E402,F401
+import app.models  # noqa: F401
+from app.config import settings
+from app.db.base import Base
 
 config = context.config
 
@@ -44,19 +43,32 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _run(connection: Connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 def run_migrations_online() -> None:
-    """Run migrations against a live connection."""
+    """Run migrations against a live connection.
+
+    A caller may hand one in through ``config.attributes["connection"]`` (the
+    test suite's throwaway PostgreSQL does); otherwise the URL goes straight to
+    ``create_engine``, never through ``config.set_main_option``, whose
+    interpolation breaks on a ``%`` in the encoded password.
+    """
+    given = config.attributes.get("connection")
+    if given is not None:
+        _run(given)
+        return
+
     connectable = create_engine(
         settings.db_url,
         poolclass=pool.NullPool,
         connect_args=settings.db_connect_args,
     )
-
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-
-        with context.begin_transaction():
-            context.run_migrations()
+        _run(connection)
 
 
 if context.is_offline_mode():

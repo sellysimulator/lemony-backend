@@ -1,9 +1,10 @@
 """Pydantic models for the user and profile routes."""
 
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from .types import UtcDateTime
 
 
 class UserUpsertRequest(BaseModel):
@@ -18,7 +19,7 @@ class UserResponse(BaseModel):
     display_name: str | None
     email: str | None
     photo_url: str | None
-    created_at: datetime
+    created_at: UtcDateTime
 
 
 class UserStatsResponse(BaseModel):
@@ -49,6 +50,7 @@ class GameListItem(BaseModel):
     final_popularity: float | None = None
     # Cups sold over visitors; null with no visitors.
     conversion: float | None = None
+    # ISO-8601 UTC with a `Z` (`schemas.types.utc_z`).
     started_at: str
     finished_at: str
 

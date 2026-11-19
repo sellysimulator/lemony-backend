@@ -63,7 +63,17 @@ class _ProcessLock:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+    return datetime.now(UTC)
+
+
+def _expired(expires_at: datetime | None) -> bool:
+    """Whether a row's expiry has passed. A naive value is UTC: SQLite (the unit
+    tests' database) hands `timestamptz` back without a zone; PostgreSQL never does."""
+    if expires_at is None:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at <= _utcnow()
 
 
 class SqlStateBackend:
@@ -93,7 +103,7 @@ class SqlStateBackend:
             row = db.get(LiveGame, key)
             if row is None:
                 return None
-            if row.expires_at is not None and row.expires_at <= _utcnow():
+            if _expired(row.expires_at):
                 db.delete(row)
                 db.commit()
                 return None

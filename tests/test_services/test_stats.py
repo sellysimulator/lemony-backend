@@ -186,3 +186,16 @@ def test_a_claim_updates_the_stats_at_once(client):
     ).json() == {"claimed": 1}
     [_], stats = stored()
     assert stats is not None and stats.games_played == 1
+
+
+def test_rest_timestamps_are_utc_with_a_z(client):
+    created = client.post("/api/v1/users/upsert", json={}, headers=AUTH).json()["created_at"]
+    assert created.endswith("Z") and "+" not in created
+    assert save() == "f" * 32
+    [item] = client.get("/api/v1/users/me/games", headers=AUTH).json()["items"]
+    assert (item["started_at"], item["finished_at"]) == (
+        "2026-10-22T09:00:00Z",
+        "2026-10-22T09:30:00Z",
+    )
+    detail = client.get(f"/api/v1/users/me/games/{item['public_id']}", headers=AUTH).json()
+    assert detail["started_at"] == "2026-10-22T09:00:00Z"

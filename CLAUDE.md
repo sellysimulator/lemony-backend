@@ -9,9 +9,9 @@ the day (weather, customer arrivals by hour and person type, buy/refuse decision
 perishing), and the player reviews the result. After `num_days` the game is finished and
 persisted. The metric is **profit** (`final_cash - starting_cash`); there is no other score.
 
-This repo is the **backend**: FastAPI + Socket.IO on Python 3.11, MySQL (SQLAlchemy +
-Alembic) for finished games and user stats, and a switchable live-state store (MySQL
-`live_games` table by default, Redis optional). The server computes every number; the
+This repo is the **backend**: FastAPI + Socket.IO on Python 3.11, PostgreSQL (SQLAlchemy +
+psycopg 3 + Alembic) for finished games and user stats, and a switchable live-state store
+(PostgreSQL `live_games` table by default, Redis optional). The server computes every number; the
 client sends only a plan.
 
 ### Where it sits
@@ -35,7 +35,7 @@ dev, Vite proxies both to `localhost:8080`, which is why this service runs on 80
 Lemony is single-player, so the template's multiplayer pieces do not exist: **no rooms,
 no lobby, no host, no `host_secret`, no aliases, no broadcasts.** Every outbound event goes
 to the caller's sid only. Everything else in the template is kept on purpose — Firebase/
-guest identity at the handshake, refresh-resumes-the-game, MySQL persistence of finished
+guest identity at the handshake, refresh-resumes-the-game, PostgreSQL persistence of finished
 games for stats. Do not propose dropping auth, the DB or Socket.IO; simplifying anything
 else from the template needs the user's explicit OK.
 
@@ -80,7 +80,7 @@ else from the template needs the user's explicit OK.
   all the player's games, and `GET /users/me/stats` (`current_user_stats`) recomputes before
   answering when the stored `games_played` is not the count of the player's games. Games
   are only ever added to a player (save, claim), so that count is the staleness check:
-  no timestamps (MySQL `DATETIME` keeps whole seconds) and no migration.
+  no timestamps (`updated_at` moves only when a value changes) and no migration.
   Tests: `tests/test_services/test_stats.py`.
 - **`app/core/limits.py` holds every hard limit**, apart from `config_model` so code that
   needs only a limit doesn't import the whole config. Every player-supplied number has an
@@ -169,13 +169,16 @@ cp .env.example .env
 ./venv/bin/ruff check app tests
 ./venv/bin/black --check app tests  # line length 100, matches ruff (pyproject)
 ./venv/bin/mypy app tests           # default strictness
-./venv/bin/pytest -q --cov          # coverage floor 75 (pyproject)
+./venv/bin/pytest -q -m "not dbschema" --cov   # SQLite; coverage floor 75 (pyproject)
+./venv/bin/pytest -q -m dbschema    # PostgreSQL 17 via Testcontainers (needs Docker)
 ./venv/bin/alembic upgrade head
 ./venv/bin/alembic revision --autogenerate -m "..."
+python3 ../../scripts/db/gen_ddl.py --backend .   # rewrite db/schema.postgres.sql
 ```
 
-`app.main:app` is REST-only; the Socket.IO ASGI wrapper is `application`. The four
-checks above are exactly what CI runs (then `docker build`); all must stay green.
+`app.main:app` is REST-only; the Socket.IO ASGI wrapper is `application`. The checks
+above are exactly what CI runs (the four lint/type/unit checks plus `docker build` in one
+job, `pytest -m dbschema` in a second); all must stay green.
 `# type: ignore`s are targeted: `import-untyped` on `socketio`/`firebase_admin` (no
 stubs), `attr-defined` on DML `rowcount` (SQLAlchemy types `execute()` as `Result`), and
 `return-value` on the Redis client posing as `StateBackend`.
@@ -191,8 +194,8 @@ crashes until it is reloaded.
 **The `fix/charts` release breaks that exception: deploy the backend first, then the
 frontend right after it.** The branch as a whole can't go frontend first: its new frontend
 needs what its earlier backend commits add (`POST /config/preview` and the other new
-server figures, plus migrations 0004 and 0005, which the backend's `preDeployCommand`
-applies). Keep the gap short. Until the new frontend is live, an open tab on the old one
+server figures, plus the nullable `game_days.cost_per_cup` and the `inventory_open_*`
+columns, which the backend's `preDeployCommand` applies). Keep the gap short. Until the new frontend is live, an open tab on the old one
 can crash on a duplicate `day_result` (`events: null`) or on a resume of a played,
 unacknowledged day (no `last_day_events`), until it is reloaded. After this release the
 general rule applies again.
@@ -208,6 +211,7 @@ general rule applies again.
 | Limits fixture | `tests/fixtures/limits.json` (= `public_limits()`) | `src/__tests__/fixtures/limits.json` (byte-identical) |
 | Cost per cup | `engine.cup_cost` (preview, day record, config preview's `cup_cost`) | shown only: `PlanDay`, `DayReport`, the help |
 | REST shapes | `app/schemas/user.py`, `app/api/v1/*` | `src/api/rest.ts` |
+| Timestamps (`created_at`, a stored game's `started_at` / `finished_at`): ISO-8601 UTC ending in `Z` | `app/schemas/types.py` (`utc_z`, `UtcDateTime`), `db_service.game_row_summary` / `load_game_detail` | `new Date(value)` as is (never append a zone): `pages/ProfilePage.tsx`, `pages/ProfileGamePage.tsx` |
 | Engine output shapes (`view()`, day record, `summary()`) | `app/core/engine.py` | `src/types/game.ts` (hand-written, no codegen) |
 | Vocabulary constants (incl. refusal reasons) | `core/defaults.py`, `core/demand.py` | `src/types/game.ts`, `src/utils/format.ts` `REASON_TEXT` |
 
@@ -251,16 +255,17 @@ decimals.
 - **SQL live-state backend = single instance.** With `REDIS_ENABLED=false` (the default),
   locks are process-local `asyncio.Lock`s. Run exactly one instance, no `--workers`. Scaling
   out requires `REDIS_ENABLED=true` + `REDIS_URL`. The startup check warns about this.
-  (Unlike Beery, Redis-off here means the MySQL `live_games` table, which survives
+  (Unlike Beery, Redis-off here means the PostgreSQL `live_games` table, which survives
   restarts, not an in-process dict.)
 - **Stored-game compatibility.** Live docs carry `schema_version` (`SCHEMA_VERSION=2`); a
   mismatch is **deleted on read**, never migrated. `from_payload` re-validates config with
   `GameConfig.validate_uncapped` (every rule but the customers-a-day cap), so tightening
   any other rule can make in-flight games unloadable. Legacy paths
   (`pack_sizes`, `Batch.unit_cost=None`) exist for old docs — don't remove them without
-  bumping the schema version. Day records may hold `cost_per_cup: null` (migration 0004);
+  bumping the schema version. Day records may hold `cost_per_cup: null` (nullable column);
   older stored days keep the list price on no-sale days and the refusal reasons they had.
-  `inventory_open` (migration 0005) is absent on days played before it, and so are the
+  `inventory_open` (nullable `inventory_open_*` columns) is absent on days played before
+  it, and so are the
   events' `sales`/`stock`/`cups_left`: the client then hides the playback's stock panel.
   Documents saved before the per-customer list was dropped still carry
   `engine.last_day_events`: `from_payload` ignores it and the next save drops it.
@@ -288,7 +293,24 @@ decimals.
 - **Tests** use a temp SQLite DB via `DB_URL_OVERRIDE` set in `tests/conftest.py` before
   `app` is imported; tables are recreated per test; no Redis, `.env` never read.
   `asyncio_mode = strict` → every async test needs `@pytest.mark.asyncio`. A change to the
-  Redis backend needs a manual smoke test against a real Redis.
+  Redis backend needs a manual smoke test against a real Redis. Tests marked `dbschema`
+  run on a Testcontainers `postgres:17` migrated to head (`tests/fixtures/postgres.py`):
+  the schema checks in `tests/test_db/` (committed DDL, models = migrations, UTC sessions,
+  every timestamp `timestamptz`), and every test taking the `db_sessions` fixture runs
+  once on SQLite and once on PostgreSQL through the real service code (stored-game parity
+  in `test_persistence.py`, `live_games` in `test_live_games.py`).
+- **PostgreSQL rules.** Driver psycopg 3 (`postgresql+psycopg://`, credentials
+  percent-encoded). `Settings.db_connect_args` sets `options=-c timezone=UTC` on every
+  connection, and TLS: `sslmode=verify-full` against `DB_SSL_CA` (PEM text is written to
+  a temp file for `sslrootcert`), else `sslmode=require` unless `DB_REQUIRE_SSL=false`;
+  any non-PostgreSQL URL (the suite's SQLite) gets no args. Every timestamp column is
+  `DateTime(timezone=True)` (`timestamptz`), written as aware UTC, and every API field or
+  stored-game timestamp leaves as ISO-8601 UTC with a `Z` (`app/schemas/types.py`
+  `utc_z` / `UtcDateTime`); SQLite hands them back naive, which the code reads as UTC.
+  `Base.metadata` has a naming convention, so constraint names are deterministic. The
+  schema is one Alembic revision, `0001_postgres_baseline`; new revisions go on top, and
+  `db/schema.postgres.sql` (from `Novus/scripts/db/gen_ddl.py`) is regenerated with
+  them — the `dbschema` job fails when it drifts.
 - **Abuse limits live in `app/core/abuse.py`**, as plain constants (no env knobs), in
   process memory (one instance). REST: `AbuseLimitMiddleware`, added *before* CORS in
   `main.py` so a 429 keeps its CORS headers. Sockets: open sockets and connects per address
@@ -312,7 +334,26 @@ decimals.
 
 `render.yaml`: one Docker web service `lemony-backend`, health check `/api/v1/health`
 (`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `preDeployCommand: alembic upgrade
-head`, `REDIS_ENABLED=false`, CORS `https://lemonysim.web.app` + localhost.
+head`, `REDIS_ENABLED=false`, CORS `https://lemonysim.web.app` + localhost. The database is
+`lemony` on the shared Novus Aiven PostgreSQL service, owned by Lemony's own login role:
+`DB_*` are set in Render (`sync: false`), `DB_REQUIRE_SSL=true`, and `DB_SSL_CA` is the
+service's CA certificate (Aiven console → the service → CA certificate; one file for all four
+games), pasted as PEM. Locally `DB_SSL_CA` is that same shared CA, as PEM text or a path
+such as `<Novus>/novus-secrets/aiven-pg-ca.pem`.
+
+**Connection budget.** All four games share one Aiven PostgreSQL 17 service (Free plan, 20
+connections), each with its own database and role. Per instance at most `DB_POOL_SIZE +
+DB_MAX_OVERFLOW`: 2 + 1 = 3 for Selly, Pulky and Beery, 3 + 1 = 4 for Lemony
+(`pool_timeout=10`: a request that waits longer for a connection fails instead of hanging).
+Normal running: 3 + 3 + 3 + 4 = 13. During a deploy Render runs the old and new instance of
+that game side by side (at most +4 = 17), its pre-deploy `alembic upgrade head` takes 1 and
+one operator `psql` session 1: 19 of 20. So deploy one game at a time. A backend run locally
+against the shared service is one more instance; prefer a local Docker PostgreSQL for
+development. On a bigger plan raise both variables (in the Render dashboard; they are not in
+`render.yaml`, so the defaults apply). Lemony gets the one extra connection because with
+Redis off `live_games` is the pool's busiest user: every store operation opens a session in
+a worker thread and closes it before returning, so no connection is held across an `await`
+or a lock wait.
 
 `autoDeployTrigger: checksPass` makes `.github/workflows/ci.yml` the deploy gate: a push
 to `main` deploys only once CI passes. Don't add a deploy job or deploy hook to CI (it

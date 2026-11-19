@@ -44,8 +44,9 @@ class Game(Base, TimestampMixin):
     total_sold_out: Mapped[int] = mapped_column(Integer, nullable=False)
     # Null for games finished before popularity existed.
     final_popularity: Mapped[Decimal | None] = mapped_column(SHARE, nullable=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
-    finished_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    # Aware UTC (`timestamptz`), from the live document's `started_at` / `finished_at`.
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class GameConfigRow(Base):
