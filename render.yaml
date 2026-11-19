@@ -1,5 +1,5 @@
 # Render Blueprint for the Lemony backend: one Docker web service (plain
-# uvicorn). PostgreSQL is the `lemony` database on the shared Novus Aiven
+# uvicorn). PostgreSQL is the `lemonydb` database on the shared Novus Aiven
 # service, provisioned separately and wired in through DB_* below;
 # preDeployCommand applies the Alembic migrations before each deploy.
 # REDIS_ENABLED=false keeps live games in PostgreSQL (single instance only).

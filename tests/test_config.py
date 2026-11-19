@@ -60,7 +60,7 @@ def test_url_is_psycopg_with_the_postgres_defaults(monkeypatch):
         "postgres",
         "localhost",
         5432,
-        "lemony",
+        "lemonydb",
     )
 
 

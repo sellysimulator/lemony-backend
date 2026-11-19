@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     DB_PORT: int = 5432
     DB_USER: str = "postgres"
     DB_PASSWORD: str = ""
-    DB_DATABASE: str = "lemony"
+    DB_DATABASE: str = "lemonydb"
     # TLS to PostgreSQL is required unless switched off (a local server without
     # TLS). DB_SSL_CA is the PostgreSQL service's CA certificate -- the PEM
     # text itself, or a path to a PEM file -- and adds certificate and hostname
