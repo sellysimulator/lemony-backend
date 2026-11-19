@@ -335,7 +335,7 @@ decimals.
 `render.yaml`: one Docker web service `lemony-backend`, health check `/api/v1/health`
 (`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `preDeployCommand: alembic upgrade
 head`, `REDIS_ENABLED=false`, CORS `https://lemonysim.web.app` + localhost. The database is
-`lemonydb` on the shared Novus Aiven PostgreSQL service, owned by Lemony's own login role:
+`lemonydb` on the shared Novus Aiven PostgreSQL service, reached as its `avnadmin` user:
 `DB_*` are set in Render (`sync: false`), `DB_REQUIRE_SSL=true`, and `DB_SSL_CA` is the
 service's CA certificate (Aiven console → the service → CA certificate; one file for all four
 games), pasted as PEM. Locally `DB_SSL_CA` is that same shared CA, as PEM text or a path
