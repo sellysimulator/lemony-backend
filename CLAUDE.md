@@ -156,6 +156,13 @@ else from the template needs the user's explicit OK.
   are weakly held (gone once released), and a client `game_id` that is not 32 lowercase hex
   is refused as `NO_GAME` (`game_service.checked_game_id`) before any lock is taken
   (`require_owned`, which `preview_plan` uses, checks it before the store is read).
+  **Lock order is identity → game**: `create_game` takes the old active game's lock inside
+  `identity_lock` to read it and delete it (so a `submit_day` holding it saves first and
+  can't save a deleted game back); nothing takes the game lock and then the identity lock
+  (`abandon_game` releases one before taking the other). Neither lock is reentrant, so
+  `persist_if_finished` (which takes the game lock) runs after that block, still under
+  `identity_lock`. `bump_seq` never saves a game that is gone (abandoned, replaced,
+  expired): it returns None and the handler sends nothing more for it.
 - **Auto-discovery everywhere.** A new REST router (module exporting `router` in
   `app/api/v1/`), socket handler module (`app/sockets/handlers/`), startup check
   (`app/core/checks/`, `register_check`) or model module (`app/models/`) is picked up by

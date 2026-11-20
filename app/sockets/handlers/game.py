@@ -26,7 +26,10 @@ and opens that day's report; a resume while a day is `played` but not acknowledg
 does the same.
 
 Every server event carries a monotonic per-game `seq`, except `plan_preview`, a
-request-scoped reply that is not a state event. `session_token` is sent
+request-scoped reply that is not a state event. A game deleted while a request was
+being answered (abandoned, or replaced by a new game, from another tab) gets no more
+events: `bump_seq` returns None (and never saves it back) and the handler stops there.
+So a game abandoned between its last day and `game_finished` is not saved either. `session_token` is sent
 in exactly one event, `game_created`, to the creating sid.
 
 `plan_preview` carries every figure the plan screen shows (see `core/preview.py`): the
@@ -75,6 +78,8 @@ async def _error(sid: str, code: str, message: str) -> None:
 
 async def _send_state(sid: str, document: dict[str, Any], full: bool = True) -> None:
     seq = await gs.bump_seq(document)
+    if seq is None:
+        return
     await socket_manager.emit_to_sid(
         sid, "game_state", {"seq": seq, "full": full, "state": gs.public_state(document, full)}
     )
@@ -84,6 +89,8 @@ async def _persist(sid: str, document: dict[str, Any]) -> None:
     """Save a finished game and say how it went: `game_persisted` or `game_persist_failed`."""
     public_id = await gs.persist_if_finished(document)
     seq = await gs.bump_seq(document)
+    if seq is None:
+        return
     if public_id:
         await socket_manager.emit_to_sid(
             sid, "game_persisted", {"seq": seq, "public_id": public_id}
@@ -94,6 +101,8 @@ async def _persist(sid: str, document: dict[str, Any]) -> None:
 
 async def _finish(sid: str, document: dict[str, Any]) -> None:
     seq = await gs.bump_seq(document)
+    if seq is None:
+        return
     await socket_manager.emit_to_sid(
         sid, "game_finished", {"seq": seq, "summary": gs.summary_of(document)}
     )
@@ -119,6 +128,8 @@ async def create_game(sid: str, data: Any = None) -> None:
         await _error(sid, exc.code, exc.message)
         return
     seq = await gs.bump_seq(document)
+    if seq is None:
+        return
     await socket_manager.emit_to_sid(
         sid,
         "game_created",
@@ -175,6 +186,8 @@ async def submit_day(sid: str, data: Any = None) -> None:
         await _error(sid, exc.code, exc.message)
         return
     seq = await gs.bump_seq(document)
+    if seq is None:
+        return
     await socket_manager.emit_to_sid(
         sid,
         "day_result",
