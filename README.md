@@ -15,7 +15,8 @@ cp .env.example .env            # fill DB_* for a PostgreSQL 17 (and FIREBASE_SE
 Tests run on SQLite and never read `.env`; the ones marked `dbschema` also run on a
 throwaway `postgres:17` through Testcontainers (needs Docker). CI
 (`.github/workflows/ci.yml`) runs exactly these, then builds the Docker image; Render
-deploys only after it passes:
+deploys only after it passes, and the container runs `alembic upgrade head` before it starts
+uvicorn (free Render instances have no pre-deploy command):
 
 ```bash
 ./venv/bin/ruff check app tests

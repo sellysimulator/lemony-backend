@@ -195,7 +195,7 @@ crashes until it is reloaded.
 frontend right after it.** The branch as a whole can't go frontend first: its new frontend
 needs what its earlier backend commits add (`POST /config/preview` and the other new
 server figures, plus the nullable `game_days.cost_per_cup` and the `inventory_open_*`
-columns, which the backend's `preDeployCommand` applies). Keep the gap short. Until the new frontend is live, an open tab on the old one
+columns, which the backend's startup migration applies). Keep the gap short. Until the new frontend is live, an open tab on the old one
 can crash on a duplicate `day_result` (`events: null`) or on a resume of a played,
 unacknowledged day (no `last_day_events`), until it is reloaded. After this release the
 general rule applies again.
@@ -333,8 +333,12 @@ decimals.
 ## Deploy
 
 `render.yaml`: one Docker web service `lemony-backend`, health check `/api/v1/health`
-(`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `preDeployCommand: alembic upgrade
-head`, `REDIS_ENABLED=false`, CORS `https://lemonysim.web.app` + localhost. The database is
+(`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `plan: free`,
+`REDIS_ENABLED=false`, CORS `https://lemonysim.web.app` + localhost. Migrations run at
+container startup: the Dockerfile CMD is `alembic upgrade head && exec uvicorn …`, because
+free Render instances have no pre-deploy command. A failed migration exits non-zero, the new
+instance never becomes healthy and Render keeps the previous deploy live. Run one instance
+only (Alembic must not race itself), and never `create_all()` at startup. The database is
 `lemonydb` on the shared Novus Aiven PostgreSQL service, reached as its `avnadmin` user:
 `DB_*` are set in Render (`sync: false`), `DB_REQUIRE_SSL=true`, and `DB_SSL_CA` is the
 service's CA certificate (Aiven console → the service → CA certificate; one file for all four
@@ -346,7 +350,7 @@ connections), each with its own database and role. Per instance at most `DB_POOL
 DB_MAX_OVERFLOW`: 2 + 1 = 3 for Selly, Pulky and Beery, 3 + 1 = 4 for Lemony
 (`pool_timeout=10`: a request that waits longer for a connection fails instead of hanging).
 Normal running: 3 + 3 + 3 + 4 = 13. During a deploy Render runs the old and new instance of
-that game side by side (at most +4 = 17), its pre-deploy `alembic upgrade head` takes 1 and
+that game side by side (at most +4 = 17), its startup `alembic upgrade head` takes 1 and
 one operator `psql` session 1: 19 of 20. So deploy one game at a time. A backend run locally
 against the shared service is one more instance; prefer a local Docker PostgreSQL for
 development. On a bigger plan raise both variables (in the Render dashboard; they are not in
