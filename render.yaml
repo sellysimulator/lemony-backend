@@ -1,7 +1,8 @@
-# Render Blueprint for the Lemony backend: one Docker web service (plain
+# Render service definition for the Lemony backend (not linked as a Blueprint:
+# the dashboard is set by hand to match it): one Docker web service (plain
 # uvicorn). PostgreSQL is the `lemonydb` database on the shared Novus Aiven
-# service, provisioned separately and wired in through DB_* below;
-# preDeployCommand applies the Alembic migrations before each deploy.
+# service, provisioned separately and wired in through DB_* below.
+# Migrations run at container startup (Dockerfile CMD): free instances have no pre-deploy command.
 # REDIS_ENABLED=false keeps live games in PostgreSQL (single instance only).
 services:
   - type: web
@@ -9,14 +10,13 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
     healthCheckPath: /api/v1/health
     # Render deploys a push to the linked branch only once every GitHub check
     # on that commit has passed -- this IS the CI gate. There is deliberately no
     # deploy job or deploy hook in ci.yml: with both, a passing push deploys
     # twice, and with plain on-commit auto-deploy a failing push ships anyway.
     autoDeployTrigger: checksPass
-    preDeployCommand: alembic upgrade head
     envVars:
       - key: DEBUG
         value: "false"
