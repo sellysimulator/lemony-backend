@@ -1,26 +1,34 @@
 # Lemony Backend
 
-FastAPI + Socket.IO backend for Lemony, a single-player lemonade-stand simulation. Plumbing follows `../game_stack.md` and Beery: Firebase or guest identity at the Socket.IO handshake, per-game `seq`, a state backend you can switch to Redis, and MySQL (Alembic) for finished games.
+FastAPI + Socket.IO backend for Lemony, a single-player lemonade-stand simulation. Plumbing follows `../game_stack.md` and Beery: Firebase or guest identity at the Socket.IO handshake, per-game `seq`, a state backend you can switch to Redis, and PostgreSQL (psycopg 3, Alembic) for finished games.
 
 ## Run
 
 ```bash
 python3.11 -m venv venv
 ./venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-cp .env.example .env            # fill DB_* (and FIREBASE_SERVICE_ACCOUNT_JSON for Google sign-in)
+cp .env.example .env            # fill DB_* for a PostgreSQL 17 (and FIREBASE_SERVICE_ACCOUNT_JSON for Google sign-in)
 ./venv/bin/alembic upgrade head
 ./venv/bin/uvicorn app.main:application --reload --port 8080
 ```
 
-Tests run on SQLite and never read `.env`. CI (`.github/workflows/ci.yml`) runs exactly
-these, then builds the Docker image; Render deploys only after it passes:
+Tests run on SQLite and never read `.env`; the ones marked `dbschema` also run on a
+throwaway `postgres:17` through Testcontainers (needs Docker). CI
+(`.github/workflows/ci.yml`) runs exactly these, then builds the Docker image; Render
+deploys only after it passes:
 
 ```bash
 ./venv/bin/ruff check app tests
 ./venv/bin/black --check app tests
 ./venv/bin/mypy app tests
-./venv/bin/pytest -q --cov
+./venv/bin/pytest -q -m "not dbschema" --cov
+./venv/bin/pytest -q -m dbschema
 ```
+
+The schema is one Alembic revision (`alembic/versions/0001_postgres_baseline.py`); its
+`pg_dump` is committed as `db/schema.postgres.sql` and regenerated with
+`python3 ../../scripts/db/gen_ddl.py --backend .` whenever a migration is added. Every
+timestamp is stored as `timestamptz` in UTC and sent as ISO-8601 UTC with a `Z`.
 
 ## Layout
 
@@ -28,7 +36,7 @@ these, then builds the Docker image; Render deploys only after it passes:
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app/core/`                     | The game engine. It is pure: no I/O, and all randomness is seeded. Files:`defaults`, `config_model`, `limits`, `money`, `ingredients`, `people`, `weather`, `demand`, `engine`, `preview` (the morning plan's figures and what-if curve), `config_preview` (every figure of the config screen and its help), `plans` (the plan screen's first plan and the help's example plans). |
 | `app/core/abuse.py`             | Abuse limits, as plain constants: the REST middleware (429 over a rate limit, 413 over 64 KB), the per-address socket caps, the per-socket event limit and the per-socket `preview_plan` limit. Keyed on `cf-connecting-ip`, else the rightmost `X-Forwarded-For` entry, else the peer. |
-| `app/services/state_backend.py` | Holds live game state. With`REDIS_ENABLED=false` (the default) it uses the MySQL `live_games` table, so games survive a restart. Only one instance may run in this mode.                                                           |
+| `app/services/state_backend.py` | Holds live game state. With`REDIS_ENABLED=false` (the default) it uses the PostgreSQL `live_games` table, so games survive a restart. Only one instance may run in this mode.                                                           |
 | `app/services/game_service.py`  | Creates games, submits and acknowledges days, abandons games, and persists them. Every mutation runs under the game lock. A new game first retries the save of a finished, unsaved one, and is refused (`UNSAVED_GAME`) while that save fails. |
 | `app/services/db_service.py`    | Writes a finished game once, as a single idempotent transaction. Only after it commits are the player's stats recomputed, in a separate transaction (`stats_service.py`). It also reads games back for the profile.                    |
 | `app/sockets/handlers/`         | `connection` handles the identity handshake. `game` handles the play loop.                                                                                                                                                         |

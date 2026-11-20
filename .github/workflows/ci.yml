@@ -26,7 +26,24 @@ jobs:
         run: black --check app tests
       - name: Type check (mypy)
         run: mypy app tests
-      - name: Tests with coverage (floor in pyproject.toml)
-        run: pytest -q --cov
+      - name: Tests with coverage on SQLite (floor in pyproject.toml)
+        run: pytest -q -m "not dbschema" --cov
       - name: Build image
         run: docker build -t lemony-backend:ci .
+
+  # The same suite's PostgreSQL half: migrations, the committed DDL
+  # (db/schema.postgres.sql), live_games and a stored game on postgres:17 through
+  # Testcontainers (Docker is available on the hosted runner). pytest exits 5,
+  # failing the job, if the marker ever selects no test.
+  dbschema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: PostgreSQL tests (Testcontainers)
+        run: pytest -q -m dbschema

@@ -63,7 +63,7 @@ Weather = Literal["sunny", "cloudy", "rainy", "snowy"]
 
 
 class _Strict(BaseModel):
-    # No NaN or infinity anywhere: JSON cannot carry them back to the client or into MySQL.
+    # No NaN or infinity anywhere: JSON cannot carry them back to the client or into PostgreSQL.
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -56,7 +56,7 @@ async def test_sql_backend_roundtrip_and_expiry():
     await backend.setex("k", 60, "v2")
     assert await backend.get("k") == "v2" and await backend.exists("k") == 1
     with SessionLocal() as db:
-        expired = datetime(2000, 1, 1)  # noqa: DTZ001 — column is naive UTC
+        expired = datetime(2000, 1, 1, tzinfo=UTC)
         db.get(LiveGame, "k").expires_at = expired
         db.commit()
     assert await backend.get("k") is None

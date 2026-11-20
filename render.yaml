@@ -1,6 +1,8 @@
 # Render Blueprint for the Lemony backend: one Docker web service (plain
-# uvicorn). MySQL is provisioned separately and wired in through DB_* below.
-# REDIS_ENABLED=false keeps live games in MySQL (single instance only).
+# uvicorn). PostgreSQL is the `lemonydb` database on the shared Novus Aiven
+# service, provisioned separately and wired in through DB_* below;
+# preDeployCommand applies the Alembic migrations before each deploy.
+# REDIS_ENABLED=false keeps live games in PostgreSQL (single instance only).
 services:
   - type: web
     name: lemony-backend
@@ -30,14 +32,14 @@ services:
         sync: false
       - key: DB_DATABASE
         sync: false
-      # TLS to MySQL, no plaintext fallback.
+      # TLS to PostgreSQL, no plaintext fallback (sslmode=verify-full with DB_SSL_CA).
       - key: DB_REQUIRE_SSL
         value: "true"
-      # This project's MySQL CA certificate: paste the PEM as-is. Not a
-      # secret, but set per service -- never shared with another game.
+      # The CA certificate of the shared Novus Aiven PostgreSQL service (the
+      # same for all four games): paste the PEM as-is. Not a secret.
       - key: DB_SSL_CA
         sync: false
-      # "false": live games in MySQL; run exactly one instance.
+      # "false": live games in PostgreSQL; run exactly one instance.
       - key: REDIS_ENABLED
         value: "false"
       - key: REDIS_URL

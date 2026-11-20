@@ -1,17 +1,25 @@
-"""End-of-game persistence: what is written, how, and that a stored game rebuilds exactly."""
+"""End-of-game persistence: what is written, how, and that a stored game rebuilds exactly.
+
+Tests taking `db_sessions` run on SQLite and, under `dbschema`, on PostgreSQL through
+the same service code (`SessionLocal` pointed there).
+"""
 
 import re
 from collections import Counter
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, Self
 
+import pytest
 from sqlalchemy import event, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.orm import Session
 
 from app.core.config_model import GameConfig
 from app.core.defaults import default_config
 from app.core.engine import DayPlan, LemonadeGame
 from app.db.session import SessionLocal, engine
-from app.models.game import Game, GameDay, UserStats
+from app.models.game import Game, GameConfigRow, GameDay, UserStats
 from app.services import db_service
 from app.services import game_service as gs
 
@@ -36,8 +44,8 @@ def finished_document(
         "game_id": "f" * 32,
         "identity": identity,
         "engine": game.to_payload(),
-        "started_at": "2026-10-22T09:00:00",
-        "finished_at": "2026-10-22T09:30:00",
+        "started_at": "2026-10-22T09:00:00Z",
+        "finished_at": "2026-10-22T09:30:00Z",
         "persisted": False,
         "public_id": None,
     }
@@ -60,7 +68,7 @@ class Statements:
         self.seen.append(statement)
 
     def inserts(self) -> Counter[str]:
-        tables = (re.match(r"\s*INSERT\s+INTO\s+`?(\w+)", s, re.IGNORECASE) for s in self.seen)
+        tables = (re.match(r'\s*INSERT\s+INTO\s+"?(\w+)', s, re.IGNORECASE) for s in self.seen)
         return Counter(m.group(1) for m in tables if m)
 
 
@@ -77,24 +85,29 @@ def test_one_insert_statement_per_table():
     }
 
 
-def test_persisting_twice_writes_once():
+def test_persisting_twice_writes_once(db_sessions: Callable[[], Session]):
     document = finished_document()
     summary = gs.engine_of(document).summary()
     assert db_service.persist_finished_game(document, summary) == document["game_id"]
     assert db_service.persist_finished_game(document, summary) == document["game_id"]
-    with SessionLocal() as db:
+    with db_sessions() as db:
         assert len(db.execute(select(Game)).scalars().all()) == 1
 
 
-def test_a_stored_game_rebuilds_the_live_summary_exactly():
+def test_a_stored_game_rebuilds_the_live_summary_exactly(db_sessions: Callable[[], Session]):
     document = finished_document(days=3)
     public_id = db_service.persist_finished_game(document, gs.engine_of(document).summary())
     document["public_id"] = public_id
     live = gs.summary_of(document)
-    with SessionLocal() as db:
+    with db_sessions() as db:
         game = db.execute(select(Game).where(Game.public_id == public_id)).scalar_one()
         stored = db_service.load_game_detail(db, game)
-    assert stored["started_at"] and stored["finished_at"]
+        listed = db_service.game_row_summary(game)
+        config = db.get(GameConfigRow, game.id)
+        assert config is not None and config.config == document["engine"]["config"]
+    # UTC ISO-8601 with a `Z`, in the detail and in the list row.
+    assert stored["started_at"] == listed["started_at"] == "2026-10-22T09:00:00Z"
+    assert stored["finished_at"] == listed["finished_at"] == "2026-10-22T09:30:00Z"
     assert {k: v for k, v in stored.items() if k not in ("started_at", "finished_at")} == live
     assert all(day["inventory_end"] for day in stored["days"])
     # The opening stock is stored, and the figures derived from the record are derived
@@ -149,12 +162,12 @@ def test_a_failed_write_never_reaches_the_game(monkeypatch):
     assert db_service.persist_finished_game(document, gs.engine_of(document).summary()) is None
 
 
-def test_the_best_game_tie_goes_to_the_latest_stored():
+def test_the_best_game_tie_goes_to_the_latest_stored(db_sessions: Callable[[], Session]):
     first = finished_document(identity="uid-tie")
     second = {**finished_document(identity="uid-tie"), "game_id": "e" * 32}
     for document in (first, second):
         assert db_service.persist_finished_game(document, gs.engine_of(document).summary())
-    with SessionLocal() as db:
+    with db_sessions() as db:
         games = db.execute(select(Game).order_by(Game.id)).scalars().all()
         assert games[0].total_profit == games[1].total_profit
         assert games[0].finished_at == games[1].finished_at
@@ -177,3 +190,22 @@ def test_a_day_with_no_cup_to_make_is_stored_and_read_back_without_a_cost():
     assert stored["days"][1]["cost_per_cup"] is None
     live = gs.summary_of(document)
     assert {k: v for k, v in stored.items() if k not in ("started_at", "finished_at")} == live
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2026-10-22T09:00:00Z", datetime(2026, 10, 22, 9, 0, tzinfo=UTC)),
+        # A document saved before timestamps carried a zone: naive means UTC.
+        ("2026-10-22T09:00:00", datetime(2026, 10, 22, 9, 0, tzinfo=UTC)),
+        ("2026-10-22T11:00:00+02:00", datetime(2026, 10, 22, 9, 0, tzinfo=UTC)),
+    ],
+)
+def test_document_timestamps_are_stored_as_aware_utc(value: str, expected: datetime):
+    parsed = db_service._dt(value)
+    assert parsed == expected and parsed.utcoffset() is not None
+    assert parsed.utcoffset().total_seconds() == 0  # type: ignore[union-attr]
+
+
+def test_a_live_document_timestamp_is_utc_with_a_z():
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", gs._now())

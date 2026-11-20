@@ -2,7 +2,8 @@
 
 The environment is overridden before `app` is imported, so a developer's `.env`
 (which may point at a real database) is never touched: the suite runs on a
-throwaway SQLite file, with Firebase unconfigured.
+throwaway SQLite file, with Firebase unconfigured. Tests marked `dbschema` also
+run on a throwaway PostgreSQL (`tests/fixtures/postgres.py`, needs Docker).
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ os.environ.update(
 import app.models  # noqa: F401
 from app.db.base import Base
 from app.db.session import engine
+from tests.fixtures.postgres import db_sessions, pg, pg_sessions  # noqa: F401
 
 
 @pytest.fixture(autouse=True)

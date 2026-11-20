@@ -1,4 +1,4 @@
-"""Per-user aggregates, recomputed from `games` (dialect-agnostic, no MySQL upsert).
+"""Per-user aggregates, recomputed from `games` (dialect-agnostic, no upsert statement).
 
 `best_profit` is the highest `total_profit` of any one game and `avg_profit` the mean:
 games of every length and setting are compared side by side, as the profile says.
@@ -98,8 +98,9 @@ def current_user_stats(db: Session, user_id: int) -> UserStats | None:
     to someone else, so the stored `games_played` differs from the count of their games
     exactly when a game came in without its stats (the recompute after it failed, or an
     older snapshot's recompute committed last). The check is one indexed COUNT; the
-    timestamps can't decide it (MySQL `DATETIME` keeps whole seconds, and `updated_at`
-    moves only when a value changes). None when there are no stats and no games.
+    timestamps can't decide it (`updated_at` moves only when a value changes, and a
+    concurrent save and recompute can commit in either order). None when there are no
+    stats and no games.
 
     A failed repair is logged and the stored stats are served as they are; the next read
     tries again.

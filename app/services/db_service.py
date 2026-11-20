@@ -4,7 +4,7 @@
 on `public_id` (the live game id), one INSERT per table (the day, type and hour
 rows each go in one executemany). It is synchronous — call it through
 `anyio.to_thread.run_sync` from async code so the event loop never blocks on
-MySQL. It never raises: on failure it logs and returns None, and the live
+the database. It never raises: on failure it logs and returns None, and the live
 document keeps `persisted: false`.
 
 The player's stats are not part of that transaction. Once the game is committed they
@@ -19,7 +19,7 @@ summary exactly through the same builder (`engine.summarize`).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 
@@ -32,15 +32,16 @@ from app.core.money import round_cents
 from ..core.defaults import INGREDIENT_NAMES, PERSON_TYPES
 from ..core.engine import success_rate, summarize
 from ..models.game import Game, GameConfigRow, GameDay, GameDayHour, GameDayType
+from ..schemas.types import utc_z
 from .stats_service import refresh_user_stats
 from .user_service import UserService
 
 logger = logging.getLogger(__name__)
 _users = UserService()
 
-# Core statements on the mapped tables, not the ORM unit of work: the ORM inserts
-# autoincrement rows one statement at a time on MySQL. None of these tables has
-# created_at/updated_at.
+# Core statements on the mapped tables, not the ORM unit of work: one executemany
+# per child table, with no objects built and no new ids read back. None of these
+# tables has created_at/updated_at.
 _GAME_DAYS = cast(Table, GameDay.__table__)
 _GAME_DAY_TYPES = cast(Table, GameDayType.__table__)
 _GAME_DAY_HOURS = cast(Table, GameDayHour.__table__)
@@ -55,7 +56,14 @@ def _share(value: float | None) -> Decimal | None:
 
 
 def _dt(value: str) -> datetime:
-    return datetime.fromisoformat(value).replace(tzinfo=None)
+    """A document timestamp as an aware UTC datetime.
+
+    Documents write `...Z`; a naive value (a document saved before they did) is UTC.
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def is_guest(identity: str) -> bool:
@@ -233,8 +241,8 @@ def game_row_summary(game: Game) -> dict[str, Any]:
         "total_sold_out": game.total_sold_out,
         "final_popularity": _f(game.final_popularity),
         "conversion": success_rate(game.total_buyers, game.total_visitors),
-        "started_at": game.started_at.isoformat(),
-        "finished_at": game.finished_at.isoformat(),
+        "started_at": utc_z(game.started_at),
+        "finished_at": utc_z(game.finished_at),
     }
 
 
@@ -302,8 +310,8 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
     )
     detail.update(
         public_id=game.public_id,
-        started_at=game.started_at.isoformat(),
-        finished_at=game.finished_at.isoformat(),
+        started_at=utc_z(game.started_at),
+        finished_at=utc_z(game.finished_at),
     )
     config_row = db.get(GameConfigRow, game.id)
     detail["config"] = config_row.config if config_row else None

@@ -30,9 +30,11 @@ class UserService:
         upsert racing a game persist or guest claim) can both miss the lookup and
         both INSERT. The
         INSERT runs in a savepoint: the loser rolls back only that savepoint,
-        keeping the caller's transaction, and re-reads the winner's row. The
-        re-read is a locking read because MySQL's REPEATABLE READ snapshot would
-        otherwise still show no row.
+        keeping the caller's transaction, and re-reads the winner's row. Under
+        PostgreSQL's READ COMMITTED the loser's unique violation is raised only
+        once the winner has committed, so a fresh statement sees the row; the
+        re-read is also a locking read (`FOR UPDATE`) so the row cannot change
+        under the caller's update until it commits.
         """
         user = self.get_by_firebase_uid(db, firebase_uid)
         if user is not None:
