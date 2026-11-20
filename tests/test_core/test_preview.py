@@ -1,4 +1,4 @@
-"""LE-4: `plan_preview`, the expected-value what-if curve for the morning plan.
+"""`plan_preview`, the expected-value what-if curve for the morning plan.
 
 The expectations below are computed here from the documented formulas
 (`core/demand.py`, and the cost per cup written out in `reference_cost`), never by
@@ -578,7 +578,7 @@ def test_preview_draws_nothing_but_todays_weather(monkeypatch):
     assert purposes in ([], ["1:weather"])  # today's weather, no customers/perish stream
 
 
-# --------------------------------------------------- simulated days (acceptance 2)
+# ------------------------------------------------------------------ simulated days
 @pytest.mark.parametrize("weather, temperature", [("sunny", 30.0), ("cloudy", 20.0)])
 def test_expected_cups_match_the_mean_of_simulated_days(monkeypatch, weather, temperature):
     monkeypatch.setattr(

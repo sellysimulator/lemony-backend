@@ -1,4 +1,4 @@
-"""LE-4: the `preview_plan` socket handler and its `plan_preview` reply.
+"""The `preview_plan` socket handler and its `plan_preview` reply.
 
 Refusals must look exactly like `submit_day`'s (same code, same message) but travel
 inside the reply, never as an `error` event. The reply goes to the asking sid only,
