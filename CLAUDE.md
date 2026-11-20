@@ -19,7 +19,8 @@ client sends only a plan.
 ```
 Novus/
 ├── game_stack.md            shared template + security invariants (canonical copy)
-├── Beery/, Selly/           sibling games built from the same template
+├── Beery/, Selly/, Pulky/   sibling games built from the same template
+├── Supply/                  the game catalog (branded Selly)
 └── Lemony/
     ├── game_stack.md        generated copy — never edit in place
     ├── Lemony_Backend/      ← this repo (github.com/sellysimulator/lemony-backend) → Render (Docker)
@@ -190,15 +191,6 @@ exception: when the backend stops sending a field the live frontend reads (as wh
 events dropped the history, or states dropped `last_day_events` and a duplicate
 `day_result` got `events: null`), ship the frontend first, or an open tab on the old frontend
 crashes until it is reloaded.
-
-**The `fix/charts` release breaks that exception: deploy the backend first, then the
-frontend right after it.** The branch as a whole can't go frontend first: its new frontend
-needs what its earlier backend commits add (`POST /config/preview` and the other new
-server figures, plus the nullable `game_days.cost_per_cup` and the `inventory_open_*`
-columns, which the backend's startup migration applies). Keep the gap short. Until the new frontend is live, an open tab on the old one
-can crash on a duplicate `day_result` (`events: null`) or on a resume of a played,
-unacknowledged day (no `last_day_events`), until it is reloaded. After this release the
-general rule applies again.
 
 | What | Backend | Frontend |
 |---|---|---|
