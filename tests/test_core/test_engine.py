@@ -573,7 +573,7 @@ def test_low_popularity_turns_most_adult_refusals_into_not_popular():
                 reasons[event["reason"]] += 1
         assert sum(result["record"]["refusal_reasons"].values()) == result["record"]["refused"]
     # Without popularity the cup is perfect and the price is under what they would pay, so
-    # every refusal used to read "too pricey"; now the ones popularity caused say so.
+    # the refusals popularity caused must say so rather than read "too pricey".
     assert set(reasons) <= {"not_popular", "too_pricey"}
     share = reasons["not_popular"] / sum(reasons.values())
     assert share > 0.5
