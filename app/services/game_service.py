@@ -128,16 +128,21 @@ async def create_game(identity: str, config_data: Any, replace: bool = False) ->
     async with state_svc.identity_lock(identity):
         active_id = await state_svc.get_active_game_id(identity)
         if active_id:
-            active = await state_svc.get_game(active_id)
-            unfinished = active is not None and active["engine"]["phase"] != "finished"
-            if unfinished and not replace:
-                raise GameError(
-                    "ACTIVE_GAME_EXISTS",
-                    "You already have a game in progress. Resume it or start over.",
-                )
-            if unfinished:
-                await state_svc.delete_game(active_id)
-            elif active is not None and await persist_if_finished(active) is None:
+            # Under the old game's own lock, so a `submit_day` already holding it saves
+            # first and is then read here; deleted in there, it can't be saved back.
+            # Lock order is always identity → game; nothing takes them the other way.
+            async with state_svc.lock(active_id):
+                active = await state_svc.get_game(active_id)
+                unfinished = active is not None and active["engine"]["phase"] != "finished"
+                if unfinished and not replace:
+                    raise GameError(
+                        "ACTIVE_GAME_EXISTS",
+                        "You already have a game in progress. Resume it or start over.",
+                    )
+                if unfinished:
+                    await state_svc.delete_game(active_id)
+            # Outside the game lock: `persist_if_finished` takes it (it is not reentrant).
+            if not unfinished and active is not None and await persist_if_finished(active) is None:
                 raise GameError(
                     "UNSAVED_GAME",
                     "Your last game is not saved yet, so a new one can't start. "
@@ -249,10 +254,17 @@ async def abandon_game(identity: str, game_id: Any) -> None:
             await state_svc.clear_active_game(identity)
 
 
-async def bump_seq(document: dict[str, Any]) -> int:
-    """Allocate the next sequence number for an outgoing event, and save it."""
+async def bump_seq(document: dict[str, Any]) -> int | None:
+    """Allocate the next sequence number for an outgoing event, and save it.
+
+    None when the game is gone (abandoned, replaced by a new game, or expired) since
+    the caller read it: nothing is saved, so the game stays gone, and the caller sends
+    nothing more about it.
+    """
     async with state_svc.lock(document["game_id"]):
-        fresh = await state_svc.get_game(document["game_id"]) or document
+        fresh = await state_svc.get_game(document["game_id"])
+        if fresh is None:
+            return None
         seq = state_svc.next_seq(fresh)
         await state_svc.save_game(fresh)
     document["seq"] = seq
