@@ -13,12 +13,14 @@ failure there is logged and changes nothing about the save (the public id is sti
 returned, so `game_persisted` is still sent), and reading the stats repairs them.
 
 Every field of a day record is stored, so `load_game_detail` rebuilds the live
-summary exactly through the same builder (`engine.summarize`).
+summary exactly through the same builder (`engine.summarize`). `public_results` is that
+detail as anyone holding the game's public id may see it (`GET /games/id/{id}/results`).
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
@@ -69,6 +71,9 @@ def _dt(value: str) -> datetime:
 def is_guest(identity: str) -> bool:
     return identity.startswith("guest_")
 
+
+#: A stored game's public id is its live game id, `uuid4().hex`.
+_PUBLIC_ID_RE = re.compile(r"[0-9a-f]{32}")
 
 _TYPE_FIELDS = ("visitors", "buyers", "sold_out")
 _HOUR_FIELDS = ("hour", "visitors", "buyers", "sold_out")
@@ -315,4 +320,30 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
     )
     config_row = db.get(GameConfigRow, game.id)
     detail["config"] = config_row.config if config_row else None
+    return detail
+
+
+def find_game_by_public_id(db: Session, public_id: str) -> Game | None:
+    """The stored game with this public id, or None. A malformed id is None unread."""
+    if not _PUBLIC_ID_RE.fullmatch(public_id):
+        return None
+    return db.execute(select(Game).where(Game.public_id == public_id)).scalar_one_or_none()
+
+
+#: In the owner's detail, not on the open results page: the settings feed only the end
+#: screen's "Play again", and the start time is not shown anywhere.
+_OWNER_ONLY_KEYS = ("config", "started_at")
+
+
+def public_results(db: Session, game: Game) -> dict[str, Any]:
+    """The stored game as anyone holding its public id may see it.
+
+    The owner's detail (`load_game_detail`, the end screen's summary shape) minus
+    `_OWNER_ONLY_KEYS`: the totals, the day records and `finished_at`. It names no
+    player (no user id, uid, email, display name or guest identity) and carries no
+    internal id or seed; the detail never did, and `test_results.py` sweeps for them.
+    """
+    detail = load_game_detail(db, game)
+    for key in _OWNER_ONLY_KEYS:
+        detail.pop(key, None)
     return detail

@@ -17,7 +17,7 @@ from ...schemas.user import (
     UserStatsResponse,
     UserUpsertRequest,
 )
-from ...services.db_service import game_row_summary, load_game_detail
+from ...services.db_service import find_game_by_public_id, game_row_summary, load_game_detail
 from ...services.stats_service import current_user_stats
 from ...services.user_service import UserService
 from ..deps import get_current_firebase_user
@@ -132,8 +132,10 @@ def get_my_game(
     db: Annotated[Session, Depends(get_db)],
     claims: Annotated[dict, Depends(get_current_firebase_user)],
 ) -> dict[str, Any]:
+    """The owner's view of one stored game; `GET /games/id/{public_id}/results` is the
+    open one, without the settings."""
     user = _user_service.get_by_firebase_uid(db, claims["uid"])
-    game = db.execute(select(Game).where(Game.public_id == public_id)).scalar_one_or_none()
+    game = find_game_by_public_id(db, public_id)
     if user is None or game is None or game.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Game not found.")
     return load_game_detail(db, game)
