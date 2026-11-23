@@ -49,6 +49,30 @@ async def test_the_lock_still_excludes():
 
 
 @pytest.mark.asyncio
+async def test_waiting_for_a_held_lock_times_out():
+    backend = SqlStateBackend()
+    async with backend.lock("k"):
+        with pytest.raises(TimeoutError):
+            async with backend.lock("k", timeout=0.05):
+                pytest.fail("the lock is held")  # pragma: no cover
+    async with backend.lock("k", timeout=0.05):  # free again: no leftover waiter holds it
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_request_stuck_behind_a_held_game_lock_gets_server_error(
+    emits: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(state_service, "LOCK_TIMEOUT_SECONDS", 0.05)
+    await connect("s1", {"guestId": new_guest()})
+    await game.create_game("s1", {"config": config()})
+    game_id = emits.of("game_created")[0]["game_id"]
+    async with state_service.state_svc.lock(game_id):
+        await game.ack_day("s1", {"game_id": game_id, "day": 1})
+    assert [e["code"] for e in emits.of("error")] == ["SERVER_ERROR"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("game_id", [None, 7, "", "x" * 100_000, "F" * 32, "f" * 33])
 async def test_a_malformed_game_id_is_refused_before_any_lock(
     emits: Any, monkeypatch: pytest.MonkeyPatch, game_id: Any
