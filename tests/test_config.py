@@ -157,13 +157,13 @@ def test_boot_log_is_silent_on_sqlite(caplog):
     assert not [r for r in caplog.records if r.name == db_tls_check.logger.name]
 
 
-def test_pool_is_sized_for_a_20_connection_plan(monkeypatch):
+def test_pool_fits_the_50_connection_budget(monkeypatch):
     s = _pg_settings(monkeypatch)
-    assert (s.DB_POOL_SIZE, s.DB_MAX_OVERFLOW) == (3, 1)
-    # One shared 20-connection service: Selly, Pulky and Beery at 3 each, Lemony,
-    # plus a deploy's second instance of the largest (4), alembic and one psql (2).
-    lemony = s.DB_POOL_SIZE + s.DB_MAX_OVERFLOW
-    assert 3 * 3 + lemony + max(3, lemony) + 2 <= 20
+    assert (s.DB_POOL_SIZE, s.DB_MAX_OVERFLOW) == (20, 4)
+    # Lemony's own Neon budget: the old and new instance during a deploy, plus the
+    # new one's alembic and one operator psql.
+    per_instance = s.DB_POOL_SIZE + s.DB_MAX_OVERFLOW
+    assert 2 * per_instance + 1 + 1 <= 50
 
 
 def test_pool_size_comes_from_the_environment(monkeypatch):

@@ -1,7 +1,8 @@
 # Render service definition for the Lemony backend (not linked as a Blueprint:
 # the dashboard is set by hand to match it): one Docker web service (plain
-# uvicorn). PostgreSQL is the `lemonydb` database on the shared Novus Aiven
-# service, provisioned separately and wired in through DB_* below.
+# uvicorn). PostgreSQL is the `lemonydb` database in Lemony's own Neon project
+# (PostgreSQL 18, AWS US East 1), provisioned separately and wired in through
+# DB_* below; DB_HOST is Neon's direct endpoint (no `-pooler`).
 # Migrations run at container startup (Dockerfile CMD): free instances have no pre-deploy command.
 # REDIS_ENABLED=false keeps live games in PostgreSQL (single instance only).
 services:
@@ -35,8 +36,9 @@ services:
       # TLS to PostgreSQL, no plaintext fallback (sslmode=verify-full with DB_SSL_CA).
       - key: DB_REQUIRE_SSL
         value: "true"
-      # The CA certificate of the shared Novus Aiven PostgreSQL service (the
-      # same for all four games): paste the PEM as-is. Not a secret.
+      # The Let's Encrypt roots ISRG Root X1 + ISRG Root X2 that Neon's
+      # certificates chain to (the same for all four games): paste the PEM text
+      # of both certificates as-is. Not a secret.
       - key: DB_SSL_CA
         sync: false
       # "false": live games in PostgreSQL; run exactly one instance.

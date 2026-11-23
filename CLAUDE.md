@@ -187,7 +187,7 @@ cp .env.example .env
 ./venv/bin/black --check app tests  # line length 100, matches ruff (pyproject)
 ./venv/bin/mypy app tests           # default strictness
 ./venv/bin/pytest -q -m "not dbschema" --cov   # SQLite; coverage floor 75 (pyproject)
-./venv/bin/pytest -q -m dbschema    # PostgreSQL 17 via Testcontainers (needs Docker)
+./venv/bin/pytest -q -m dbschema    # PostgreSQL 18 via Testcontainers (needs Docker)
 ./venv/bin/alembic upgrade head
 ./venv/bin/alembic revision --autogenerate -m "..."
 python3 ../../scripts/db/gen_ddl.py --backend .   # rewrite db/schema.postgres.sql
@@ -303,7 +303,7 @@ decimals.
   `app` is imported; tables are recreated per test; no Redis, `.env` never read.
   `asyncio_mode = strict` → every async test needs `@pytest.mark.asyncio`. A change to the
   Redis backend needs a manual smoke test against a real Redis. Tests marked `dbschema`
-  run on a Testcontainers `postgres:17` migrated to head (`tests/fixtures/postgres.py`):
+  run on a Testcontainers `postgres:18` migrated to head (`tests/fixtures/postgres.py`):
   the schema checks in `tests/test_db/` (committed DDL, models = migrations, UTC sessions,
   every timestamp `timestamptz`), and every test taking the `db_sessions` fixture runs
   once on SQLite and once on PostgreSQL through the real service code (stored-game parity
@@ -349,25 +349,44 @@ container startup: the Dockerfile CMD is `alembic upgrade head && exec uvicorn �
 free Render instances have no pre-deploy command. A failed migration exits non-zero, the new
 instance never becomes healthy and Render keeps the previous deploy live. Run one instance
 only (Alembic must not race itself), and never `create_all()` at startup. The database is
-`lemonydb` on the shared Novus Aiven PostgreSQL service, reached as its `avnadmin` user:
-`DB_*` are set in Render (`sync: false`), `DB_REQUIRE_SSL=true`, and `DB_SSL_CA` is the
-service's CA certificate (Aiven console → the service → CA certificate; one file for all four
-games), pasted as PEM. Locally `DB_SSL_CA` is that same shared CA, as PEM text or a path
-such as `<Novus>/novus-secrets/aiven-pg-ca.pem`.
+`lemonydb` in Lemony's own Neon project (Free plan, PostgreSQL 18, AWS US East 1 — the
+Render service's region), reached as `neondb_owner` on port 5432: `DB_*` are set in Render
+(`sync: false`), `DB_REQUIRE_SSL=true`. `DB_HOST` is Neon's **direct** endpoint
+(`ep-….us-east-1.aws.neon.tech`, no `-pooler`): the pooled endpoint is PgBouncer in
+transaction mode and rejects the `options=-c timezone=UTC` startup parameter. `DB_SSL_CA` is
+the Let's Encrypt roots ISRG Root X1 + ISRG Root X2 in one PEM bundle (Neon's certificates
+chain to them; the same public file for all four games, not a secret): on Render the PEM
+text of both certificates, locally `<Novus>/novus-secrets/neon-ca.pem`. Check TLS with the
+boot log line (`verify-full`), psql's `\conninfo` (`SSL Connection | true`) or
+`Novus/scripts/db/verify_live_db.py`, never `pg_stat_ssl`: Neon's proxy terminates TLS, so
+it shows `f` even on encrypted links.
 
-**Connection budget.** All four games share one Aiven PostgreSQL 17 service (Free plan, 20
-connections), each with its own database and role. Per instance at most `DB_POOL_SIZE +
-DB_MAX_OVERFLOW`: 2 + 1 = 3 for Selly, Pulky and Beery, 3 + 1 = 4 for Lemony
-(`pool_timeout=10`: a request that waits longer for a connection fails instead of hanging).
-Normal running: 3 + 3 + 3 + 4 = 13. During a deploy Render runs the old and new instance of
-that game side by side (at most +4 = 17), its startup `alembic upgrade head` takes 1 and
-one operator `psql` session 1: 19 of 20. So deploy one game at a time. A backend run locally
-against the shared service is one more instance; prefer a local Docker PostgreSQL for
-development. On a bigger plan raise both variables (in the Render dashboard; they are not in
-`render.yaml`, so the defaults apply). Lemony gets the one extra connection because with
-Redis off `live_games` is the pool's busiest user: every store operation opens a session in
-a worker thread and closes it before returning, so no connection is held across an `await`
-or a lock wait.
+Neon Free: compute fixed at 0.25 CU, suspended after 5 min idle (the first request after
+that waits a cold start, under a second; `pool_pre_ping=True` replaces the dropped
+connections), 100 CU-hours a month and 1 GB, `max_connections` 112, a short restore
+window. Keep your own backups: `pg_dump -Fc --no-owner --no-privileges` against the direct
+endpoint.
+
+**Connection budget.** Lemony's whole budget is 50 connections, deploys included. Per
+instance at most `DB_POOL_SIZE + DB_MAX_OVERFLOW` = 20 + 4 = 24 (`pool_timeout=10`: a
+request that waits longer for a connection fails instead of hanging). During a deploy
+Render runs the old and new instance side by side, the new one's startup `alembic upgrade
+head` takes 1 and an operator `psql` session 1:
+
+| State | Connections |
+|---|---|
+| Normal running | 24 |
+| Deploy overlap (old + new instance) | 48 |
+| + startup `alembic upgrade head` | 49 |
+| + one operator `psql` | 50 |
+
+A backend run locally against Neon is one more instance and takes the game over budget
+during a deploy, so everyday development uses a local Docker PostgreSQL 18
+(`DB_HOST=localhost`, `DB_PORT=5432`, `DB_USER=postgres`, empty `DB_SSL_CA`,
+`DB_REQUIRE_SSL=false`). The pool variables are set in the Render dashboard only if they
+change (they are not in `render.yaml`, so the defaults apply). With Redis off `live_games`
+is the pool's busiest user: every store operation opens a session in a worker thread and
+closes it before returning, so no connection is held across an `await` or a lock wait.
 
 `autoDeployTrigger: checksPass` makes `.github/workflows/ci.yml` the deploy gate: a push
 to `main` deploys only once CI passes. Don't add a deploy job or deploy hook to CI (it

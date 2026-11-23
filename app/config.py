@@ -54,17 +54,17 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = ""
     DB_DATABASE: str = "lemonydb"
     # TLS to PostgreSQL is required unless switched off (a local server without
-    # TLS). DB_SSL_CA is the PostgreSQL service's CA certificate -- the PEM
+    # TLS). DB_SSL_CA is the CA bundle the server's certificate chains to -- the PEM
     # text itself, or a path to a PEM file -- and adds certificate and hostname
     # verification (sslmode=verify-full); without it the link is encrypted
     # (sslmode=require) but the server is not authenticated.
     DB_REQUIRE_SSL: bool = True
     DB_SSL_CA: str = ""
     # Connections per instance: DB_POOL_SIZE kept open plus DB_MAX_OVERFLOW on
-    # demand (4). Lemony's share of the shared 20-connection Aiven service (budget:
-    # CLAUDE.md, Deploy); raise both on a bigger plan.
-    DB_POOL_SIZE: int = 3
-    DB_MAX_OVERFLOW: int = 1
+    # demand (24). Lemony's Neon budget is 50 connections, deploys included: two
+    # instances during a deploy, plus alembic and one psql (CLAUDE.md, Deploy).
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 4
     # Full SQLAlchemy URL that replaces the DB_* assembly. Used by the test
     # suite (SQLite); leave empty in every real deployment.
     DB_URL_OVERRIDE: str = ""
