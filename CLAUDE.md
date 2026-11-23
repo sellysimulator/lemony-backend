@@ -153,7 +153,9 @@ else from the template needs the user's explicit OK.
   locks `lock:game:<id>` / `lock:active:<identity>`, TTL `GAME_TTL_SECONDS` (a guest's: at most
   `GUEST_GAME_TTL_SECONDS`, 2 days). Expired `live_games` rows go when read, at startup, and
   in a sweep `create_game` triggers at most every `PURGE_EVERY_SECONDS` (10 min). Process locks
-  are weakly held (gone once released), and a client `game_id` that is not 32 lowercase hex
+  are weakly held (gone once released), and waiting for one gives up after
+  `LOCK_TIMEOUT_SECONDS` (10 s) with `TimeoutError`, which `guarded()` answers as
+  `SERVER_ERROR` (with Redis the same `timeout` is the lock's expiry instead), and a client `game_id` that is not 32 lowercase hex
   is refused as `NO_GAME` (`game_service.checked_game_id`) before any lock is taken
   (`require_owned`, which `preview_plan` uses, checks it before the store is read).
   **Lock order is identity → game**: `create_game` takes the old active game's lock inside
@@ -304,7 +306,9 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
 - **Never hardcode Socket.IO `logger`/`engineio_logger` to `True`** — tied to `DEBUG`;
   engine.io logs full packets. Never log tokens, guest ids, uids or the service account.
 - **Tests** use a temp SQLite DB via `DB_URL_OVERRIDE` set in `tests/conftest.py` before
-  `app` is imported; tables are recreated per test; no Redis, `.env` never read.
+  `app` is imported; tables are recreated per test; no Redis. `.env` is never read: the
+  same block sets `ENV_FILE` empty, and `Settings` (`app/config.py`) takes its dotenv file
+  from `ENV_FILE` (default `.env`; empty reads none), so a developer's file can't leak in.
   `asyncio_mode = strict` → every async test needs `@pytest.mark.asyncio`. A change to the
   Redis backend needs a manual smoke test against a real Redis. Tests marked `dbschema`
   run on a Testcontainers `postgres:18` migrated to head (`tests/fixtures/postgres.py`):
@@ -313,8 +317,9 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
   once on SQLite and once on PostgreSQL through the real service code (stored-game parity
   in `test_persistence.py`, `live_games` in `test_live_games.py`).
 - **PostgreSQL rules.** Driver psycopg 3 (`postgresql+psycopg://`, credentials
-  percent-encoded). `Settings.db_connect_args` sets `options=-c timezone=UTC` on every
-  connection, and TLS: `sslmode=verify-full` against `DB_SSL_CA` (PEM text is written to
+  percent-encoded). `Settings.db_connect_args` sets `options=-c timezone=UTC` and
+  `connect_timeout=10` (libpq: an unreachable server fails a new connection after 10 s; no
+  `statement_timeout`) on every connection, and TLS: `sslmode=verify-full` against `DB_SSL_CA` (PEM text is written to
   a temp file for `sslrootcert`), else `sslmode=require` unless `DB_REQUIRE_SSL=false`;
   any non-PostgreSQL URL (the suite's SQLite) gets no args. Every timestamp column is
   `DateTime(timezone=True)` (`timestamptz`), written as aware UTC, and every API field or
