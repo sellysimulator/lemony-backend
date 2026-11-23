@@ -7,10 +7,10 @@ The limits are plain constants: change them here.
 
 Where they apply:
 - REST: `AbuseLimitMiddleware`, added in `app/main.py`. Every request counts against
-  `REST_LIMIT` per address, requests to `HEAVY_PATHS` against `HEAVY_LIMIT` as well, and
-  a body larger than `MAX_BODY_BYTES` is refused: unread when its `Content-Length` says
-  so, else (a chunked body has none) once the bytes read pass the cap. 429 / 413, JSON
-  `detail`.
+  `REST_LIMIT` per address, requests to `HEAVY_PATHS` and `HEAVY_PATH_PATTERNS` (the open
+  results route) against `HEAVY_LIMIT` as well, and a body larger than `MAX_BODY_BYTES`
+  is refused: unread when its `Content-Length` says so, else (a chunked body has none)
+  once the bytes read pass the cap. 429 / 413, JSON `detail`.
 - Socket.IO: `SocketManager.connect` (open sockets and connects per address) and
   `guarded()` (events per sid, and `preview_plan` per sid, dropped unanswered;
   `create_game` per address, answered with `error {code: "RATE_LIMITED"}`).
@@ -43,6 +43,10 @@ HEAVY_PATHS = frozenset(
         "/api/v1/health/deep",
     }
 )
+#: Open routes with an id in the path, heavy as well: (prefix, suffix) of the path.
+#: `GET /api/v1/games/id/{public_id}/results` is open to anyone holding the id, with no
+#: expiry, and each one reads every row of a stored game.
+HEAVY_PATH_PATTERNS = (("/api/v1/games/id/", "/results"),)
 MAX_BODY_BYTES = 64 * 1024  # a full config is about 3 KB
 
 # --------------------------------------------------------------- Socket.IO
@@ -220,6 +224,14 @@ async def _reply(send: Send, status: int, detail: str) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+def is_heavy_path(path: str) -> bool:
+    """Whether a REST path counts against `HEAVY_LIMIT` as well as `REST_LIMIT`."""
+    path = path.rstrip("/")
+    return path in HEAVY_PATHS or any(
+        path.startswith(prefix) and path.endswith(suffix) for prefix, suffix in HEAVY_PATH_PATTERNS
+    )
+
+
 class AbuseLimitMiddleware:
     """Pure ASGI middleware for the REST app: 429 over a rate limit, 413 over the body cap.
 
@@ -235,7 +247,7 @@ class AbuseLimitMiddleware:
             await self.app(scope, receive, send)
             return
         ip = client_ip(scope)
-        heavy = str(scope.get("path", "")).rstrip("/") in HEAVY_PATHS
+        heavy = is_heavy_path(str(scope.get("path", "")))
         if not rest_limiter.hit(ip) or (heavy and not heavy_limiter.hit(ip)):
             await _reply(send, 429, RATE_LIMITED_MESSAGE)
             return

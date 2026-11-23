@@ -163,6 +163,15 @@ else from the template needs the user's explicit OK.
   `persist_if_finished` (which takes the game lock) runs after that block, still under
   `identity_lock`. `bump_seq` never saves a game that is gone (abandoned, replaced,
   expired): it returns None and the handler sends nothing more for it.
+- **The open results page.** `GET /games/id/{public_id}/results` (`api/v1/games.py`) is a
+  saved game's results for anyone holding its public id: no auth, no secret, no expiry. It
+  reuses the owner's serialisation (`db_service.public_results` = `load_game_detail` minus
+  `config` and `started_at`, which the results screen doesn't show) and names no player:
+  no uid, email, display name, user id or guest identity (the end screen shows no name
+  either). `find_game_by_public_id` answers None for a malformed id without a query, so
+  unknown and malformed ids are the same 404 `Game not found.`; `GET /users/me/games/{id}`
+  uses it too. It counts against the heavy REST limit (`abuse.HEAVY_PATH_PATTERNS`).
+  `tests/test_services/test_results.py` sweeps the reply's keys and values.
 - **Auto-discovery everywhere.** A new REST router (module exporting `router` in
   `app/api/v1/`), socket handler module (`app/sockets/handlers/`), startup check
   (`app/core/checks/`, `register_check`) or model module (`app/models/`) is picked up by
@@ -210,6 +219,7 @@ crashes until it is reloaded.
 | Limits fixture | `tests/fixtures/limits.json` (= `public_limits()`) | `src/__tests__/fixtures/limits.json` (byte-identical) |
 | Cost per cup | `engine.cup_cost` (preview, day record, config preview's `cup_cost`) | shown only: `PlanDay`, `DayReport`, the help |
 | REST shapes | `app/schemas/user.py`, `app/api/v1/*` | `src/api/rest.ts` |
+| Open results (`GET /games/id/{public_id}/results`: the owner's detail without `config`/`started_at`, 404 `Game not found.`) | `app/api/v1/games.py`, `db_service.public_results` | `src/api/rest.ts` `getGameResults`, `pages/ResultsPage.tsx` (`/results/:publicId`), `components/report/GameOver.tsx` |
 | Timestamps (`created_at`, a stored game's `started_at` / `finished_at`): ISO-8601 UTC ending in `Z` | `app/schemas/types.py` (`utc_z`, `UtcDateTime`), `db_service.game_row_summary` / `load_game_detail` | `new Date(value)` as is (never append a zone): `pages/ProfilePage.tsx`, `pages/ProfileGamePage.tsx` |
 | Engine output shapes (`view()`, day record, `summary()`) | `app/core/engine.py` | `src/types/game.ts` (hand-written, no codegen) |
 | Vocabulary constants (incl. refusal reasons) | `core/defaults.py`, `core/demand.py` | `src/types/game.ts`, `src/utils/format.ts` `REASON_TEXT` |
@@ -312,7 +322,8 @@ decimals.
   them — the `dbschema` job fails when it drifts.
 - **Abuse limits live in `app/core/abuse.py`**, as plain constants (no env knobs), in
   process memory (one instance). REST: `AbuseLimitMiddleware`, added *before* CORS in
-  `main.py` so a 429 keeps its CORS headers. Sockets: open sockets and connects per address
+  `main.py` so a 429 keeps its CORS headers; a heavy route is in `HEAVY_PATHS`, or in
+  `HEAVY_PATH_PATTERNS` (prefix, suffix) when its path holds an id (the open results route). Sockets: open sockets and connects per address
   in `SocketManager.connect` (checked before the token is verified); events per sid,
   `preview_plan` per sid (`@guarded(per_sid=preview_limiter)`, dropped unanswered) and
   `create_game` per address (`@guarded(per_ip=create_game_limiter)`), in `guarded()`. A new
