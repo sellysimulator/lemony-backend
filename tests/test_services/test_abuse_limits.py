@@ -111,7 +111,7 @@ async def test_create_game_is_rate_limited_per_address(
 ) -> None:
     monkeypatch.setattr(abuse.create_game_limiter, "limit", 1)
     for sid in ("s1", "s2"):  # a fresh guest per socket does not reset the count
-        await connection.connect(sid, environ("1.1.1.1"), {})
+        await connection.connect(sid, environ("1.1.1.1"), {"guestId": new_guest()})
         await game.create_game(sid, {"config": config()})
     assert len(emits.of("game_created")) == 1
     assert emits.of("error")[-1] == {

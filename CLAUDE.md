@@ -233,9 +233,11 @@ decimals.
 
 - **Identity is server-only.** Resolved once at `connect` from `auth.idToken` (verified via
   the single path `api/deps.verify_firebase_id_token`) or `auth.guestId`
-  (`^guest_<uuid>$`), else a fresh server-minted guest id. Read afterwards from
-  `socket_manager.sid_to_identity[sid]`, never from a payload. A bad `idToken` refuses the
-  connection; it never falls back to the guest id.
+  (`^guest_<uuid>$`; a malformed one gets a fresh server-minted guest id). Read afterwards
+  from `socket_manager.sid_to_identity[sid]`, never from a payload. A bad `idToken` refuses
+  the connection; it never falls back to the guest id. A handshake with neither (no
+  `auth`, or `{idToken: null, guestId: null}`, what a signed-in client sends when it could
+  not fetch its token) is refused too, never handed a fresh guest: the client retries.
 - **Never send** `identity`, the engine seed / raw engine payload, or `session_token`
   (except the single `game_created` emit to the creating sid). Clients get
   `engine.view()` / `summary()` only.

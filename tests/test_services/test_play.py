@@ -84,6 +84,15 @@ async def test_handshake_identities(firebase_tokens):
     assert (await connect("s4", {"guestId": "uid-1"})).startswith("guest_")  # can't claim a uid
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth", [None, {}, {"idToken": None, "guestId": None}, "x"])
+async def test_a_handshake_with_no_identity_is_refused(auth):
+    """A signed-in client whose token could not be fetched sends no identity at all: it is
+    refused (the client retries), never handed a fresh guest identity."""
+    assert await connect("s1", auth) is None
+    assert "s1" not in socket_manager.sid_to_identity and socket_manager.sockets_per_ip == {}
+
+
 # ------------------------------------------------------------ full game
 @pytest.mark.asyncio
 async def test_full_guest_game(emits):
