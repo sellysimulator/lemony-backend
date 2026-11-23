@@ -43,7 +43,7 @@ from .demand import (
 from .engine import LemonadeGame, cup_usage
 from .ingredients import Ingredient, pack_offers
 from .limits import PRICE_STEP
-from .money import round_cents
+from .money import half_up, round_cents
 from .people import PersonType
 from .plans import favourite_recipe, sample_plan, typical_plan
 from .weather import weather_odds
@@ -67,10 +67,6 @@ def _share(value: float) -> float:
     return round(value, 6)
 
 
-def _half_up(value: float) -> int:
-    return math.floor(value + 0.5)
-
-
 def _steps(low: float, high: float, step: float) -> list[float]:
     """``low``, ``low + step``, ... up to ``high``, at most GRID_CAP points, to the cent."""
     out: list[float] = []
@@ -83,7 +79,7 @@ def _steps(low: float, high: float, step: float) -> list[float]:
 
 def _price_grid(price: FloatRange) -> list[float]:
     """About 30 steps across the price range, each a multiple of the price step."""
-    multiple = _half_up(round((price.max - price.min) / 30 / PRICE_STEP, 9))
+    multiple = half_up(round((price.max - price.min) / 30 / PRICE_STEP, 9))
     return _steps(price.min, price.max, max(1, multiple) * PRICE_STEP)
 
 
@@ -136,7 +132,7 @@ def ingredient_preview(name: str, cfg: IngredientConfig) -> dict[str, Any]:
         "example_batch": {
             "size": EXAMPLE_BATCH,
             "after": [
-                {"night": n, "left": _half_up(EXAMPLE_BATCH * stock.survival(n))} for n in nights
+                {"night": n, "left": half_up(EXAMPLE_BATCH * stock.survival(n))} for n in nights
             ],
         },
     }

@@ -227,7 +227,9 @@ crashes until it is reloaded.
 **Rounding rule:** only the server rounds money (`core/money.py` `round_cents`: trim
 `value*100` to 12 significant digits, round half away from zero, `/100`, normalise `-0`).
 Every money figure it sends is already rounded; the client's `money()` only prints two
-decimals.
+decimals. Every other quantity rounded to a step (a Poisson count, a temperature to 0.5 °C,
+a help example's units) uses `money.half_up` (halves up); never Python's `round()` (halves
+to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float noise.
 
 ## Invariants
 

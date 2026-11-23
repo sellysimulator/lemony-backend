@@ -12,18 +12,13 @@ Halves round up, and prices land on the price step inside the price range.
 
 from __future__ import annotations
 
-import math
 from statistics import fmean
 from typing import Any
 
 from .config_model import GameConfig
 from .defaults import PERSON_TYPES, RECIPE_INGREDIENTS
 from .limits import PRICE_STEP
-from .money import round_cents
-
-
-def _half_up(value: float) -> int:
-    return math.floor(value + 0.5)
+from .money import half_up, round_cents
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -34,14 +29,14 @@ def on_price_step(config: GameConfig, value: float) -> float:
     """``value`` to the nearest price step, kept inside the price range."""
     price = config.min_max_values.price
     # The quotient is trimmed of float noise first: 0.575 / 0.05 is 11.499999999999998.
-    stepped = _half_up(round(value / PRICE_STEP, 9)) * PRICE_STEP
+    stepped = half_up(round(value / PRICE_STEP, 9)) * PRICE_STEP
     return round_cents(_clamp(round_cents(stepped), price.min, price.max))
 
 
 def midpoint_recipe(config: GameConfig) -> dict[str, int]:
     mm = config.min_max_values
     return {
-        name: _half_up((getattr(mm, name).min + getattr(mm, name).max) / 2)
+        name: half_up((getattr(mm, name).min + getattr(mm, name).max) / 2)
         for name in RECIPE_INGREDIENTS
     }
 
@@ -68,7 +63,7 @@ def typical_plan(config: GameConfig) -> dict[str, Any]:
     people = [config.people_preferences[kind] for kind in PERSON_TYPES]
     recipe = {}
     for name in RECIPE_INGREDIENTS:
-        amount = _half_up(fmean(getattr(p, f"preferred_{name}") for p in people))
+        amount = half_up(fmean(getattr(p, f"preferred_{name}") for p in people))
         rng = getattr(mm, name)
         recipe[name] = int(_clamp(amount, rng.min, rng.max))
     return {"price": on_price_step(config, _average_budget(config)), "recipe": recipe}

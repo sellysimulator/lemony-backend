@@ -19,13 +19,15 @@ from collections.abc import Iterator
 
 from .config_model import GameConfig
 from .defaults import WEATHER_TYPES
+from .money import half_up
 
 
 def day_temperature(config: GameConfig, drawn: float) -> float:
-    """The day's temperature from a uniform draw over the range: to 0.5 °C, kept in range."""
+    """The day's temperature from a uniform draw over the range: to 0.5 °C (halves up),
+    kept in range."""
     lo = config.min_max_values.temperature.min
     hi = config.min_max_values.temperature.max
-    temperature = round(drawn * 2) / 2
+    temperature = half_up(drawn * 2) / 2
     return min(max(temperature, lo), hi)
 
 
