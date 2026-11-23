@@ -258,3 +258,92 @@ async def test_a_hand_retry_during_the_background_one_still_stores_once(
     await game._persist_retries[game_id]
     assert persisted_to(emits) == [("s1", game_id)]  # it found the game saved: nothing more
     assert stored_rows(game_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_rejoin_during_the_first_save_leaves_it_to_that_save(emits, monkeypatch):
+    db = FlakyDb(monkeypatch, failures=0)
+    started, release = asyncio.Event(), asyncio.Event()
+    real = gs.persist_if_finished
+
+    async def slow(document: dict[str, Any]) -> str | None:
+        started.set()
+        await release.wait()
+        return await real(document)
+
+    monkeypatch.setattr(gs, "persist_if_finished", slow)
+    guest = new_guest()
+    await connect("s1", {"guestId": guest})
+    await game.create_game("s1", {"config": config(1)})
+    game_id = emits.of("game_created")[-1]["game_id"]
+    finishing = asyncio.create_task(game.submit_day("s1", {"game_id": game_id, "day": 1, **PLAN}))
+    await started.wait()  # the first write is under way
+    assert game.persist_retry_in_flight(game_id)
+
+    await connect("s2", {"guestId": guest})
+    await game.resume_game("s2", {"game_id": game_id})
+    await game.request_state("s2", {"game_id": game_id})
+    release.set()
+    await finishing
+    assert db.attempts == ["ok"]  # no second write
+    assert persisted_to(emits) == [("s2", game_id)]  # answered to the latest sid
+    assert stored_rows(game_id) == 1 and not game.persist_retry_in_flight(game_id)
+
+
+def hold_the_last_answer(monkeypatch, background: asyncio.Task[None]) -> tuple[Any, Any]:
+    """The background retry pauses just before its final answer: (answering, hold)."""
+    answering, hold = asyncio.Event(), asyncio.Event()
+    real_say = game._say_persisted
+
+    async def say(sid: str, document: dict[str, Any], public_id: str | None) -> None:
+        if asyncio.current_task() is background:
+            answering.set()
+            await hold.wait()
+        await real_say(sid, document, public_id)
+
+    monkeypatch.setattr(game, "_say_persisted", say)
+    return answering, hold
+
+
+@pytest.mark.asyncio
+async def test_a_rejoin_while_the_last_retry_answers_saves_again(emits, monkeypatch, retry_gate):
+    db = FlakyDb(monkeypatch, failures=4)
+    guest, game_id = await finish_a_game(emits)
+    background = game._persist_retries[game_id]
+    answering, hold = hold_the_last_answer(monkeypatch, background)
+    retry_gate.set()
+    await answering.wait()
+    assert db.attempts == ["fail"] * 4 and not game.persist_retry_in_flight(game_id)
+
+    await connect("s2", {"guestId": guest})
+    await game.request_state("s2", {"game_id": game_id})  # a new attempt, and it saves
+    assert db.attempts == ["fail"] * 4 + ["ok"]
+    assert persisted_to(emits) == [("s2", game_id)]
+    hold.set()
+    await background
+    assert stored_rows(game_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_hand_retry_failing_while_the_last_retry_answers_is_retried_too(
+    emits, monkeypatch, retry_gate
+):
+    db = FlakyDb(monkeypatch, failures=5)
+    _, game_id = await finish_a_game(emits)
+    background = game._persist_retries[game_id]
+    answering, hold = hold_the_last_answer(monkeypatch, background)
+    retry_gate.set()
+    await answering.wait()
+    retry_gate.clear()  # the next background retry waits until the end
+
+    await game.retry_persist("s1", {"game_id": game_id})  # fails: background retries again
+    assert db.attempts == ["fail"] * 5 and game.persist_retry_in_flight(game_id)
+    again = game._persist_retries[game_id]
+    assert again is not background
+    hold.set()
+    await background
+    assert game.persist_retry_in_flight(game_id)  # the old task's end leaves it be
+    retry_gate.set()
+    await again
+    assert db.attempts == ["fail"] * 5 + ["ok"]
+    assert persisted_to(emits) == [("s1", game_id)] and stored_rows(game_id) == 1

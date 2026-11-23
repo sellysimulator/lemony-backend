@@ -262,8 +262,11 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
   `persist_if_finished` is safe to repeat; a failure is reported as `game_persist_failed`
   and retried in the background (`game.py` `PERSIST_RETRY_DELAYS` = 2, 10, 30 s, one task
   per game in `_persist_retries`, no lock held while it sleeps or writes; it answers the sid
-  that last asked, in `_persist_sids`); `retry_persist` retries at once, and `resume_game` /
-  `request_state` do when no background retry is running. Tests run with no background
+  that last asked, in `_persist_sids`). A game is in `_persisting` from before its first
+  write until its last retry is done, and leaves it before the final answer (so a rejoin
+  during that answer saves again, and a failing hand retry then gets background retries);
+  `retry_persist` retries at once, and `resume_game` / `request_state` do only when no save
+  is in flight. Tests run with no background
   retries (autouse `no_background_saves`); `test_save.py` gates them with `retry_gate`. `create_game` never abandons a finished,
   unsaved game: it retries the save and refuses with `UNSAVED_GAME` while it fails.
 - **Game formulas belong to the user.** Keep existing formulas; if one looks wrong, flag it
@@ -400,6 +403,11 @@ during a deploy, so everyday development uses a local Docker PostgreSQL 18
 change (they are not in `render.yaml`, so the defaults apply). With Redis off `live_games`
 is the pool's busiest user: every store operation opens a session in a worker thread and
 closes it before returning, so no connection is held across an `await` or a lock wait.
+
+**Deploy order for the handoff-hardening release: backend before frontend.** The new
+backend accepts the old frontend's signed-in and guest handshakes, while the new frontend
+relies on the backend refusing a handshake with no identity (`{idToken: null, guestId:
+null}`) so that it retries.
 
 `autoDeployTrigger: checksPass` makes `.github/workflows/ci.yml` the deploy gate: a push
 to `main` deploys only once CI passes. Don't add a deploy job or deploy hook to CI (it

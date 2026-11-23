@@ -45,8 +45,11 @@ also retried in the background, `PERSIST_RETRY_DELAYS` (2 s, 10 s, 30 s) apart, 
 no lock held while it waits or writes; the first success sends `game_persisted`, and
 if all fail `game_persist_failed` is sent again. Both go to the sid that last asked
 about the game (a reconnect's `resume_game` or `request_state` takes them over). One
-background retry runs per game: while it does, `resume_game` and `request_state`
-leave the save to it; otherwise they retry a finished, unsaved game's save themselves.
+save is in flight per game, from before its first write until its last retry is done:
+meanwhile `resume_game` and `request_state` leave the save to it (only `retry_persist`
+writes again); otherwise they retry a finished, unsaved game's save themselves. The
+game leaves the in-flight set before the final answer, so a rejoin during that answer
+starts a new save, and a retry by hand that fails then gets background retries too.
 Every write is idempotent on the game's `public_id`, so the game is stored once.
 `create_game` retries the save of a finished, unsaved active game first and refuses
 with `UNSAVED_GAME` if it still fails, so no finished game is left behind unsaved.
@@ -94,6 +97,9 @@ async def _send_state(sid: str, document: dict[str, Any], full: bool = True) -> 
 
 # Seconds before each background retry of a failed save (after the first attempt).
 PERSIST_RETRY_DELAYS: tuple[float, ...] = (2.0, 10.0, 30.0)
+# Games with a save in flight: from before the first write until the last retry is done,
+# and no longer during the final answer (so a rejoin meanwhile can start a new save).
+_persisting: set[str] = set()
 # The background retry of each game whose save failed (a strong reference, so the task
 # is not collected mid-flight), and the sid its answer goes to: the latest one to ask.
 _persist_retries: dict[str, asyncio.Task[None]] = {}
@@ -101,7 +107,7 @@ _persist_sids: dict[str, str] = {}
 
 
 def persist_retry_in_flight(game_id: str) -> bool:
-    return game_id in _persist_retries
+    return game_id in _persisting
 
 
 async def _say_persisted(sid: str, document: dict[str, Any], public_id: str | None) -> None:
@@ -117,52 +123,73 @@ async def _say_persisted(sid: str, document: dict[str, Any], public_id: str | No
         await socket_manager.emit_to_sid(sid, "game_persist_failed", {"seq": seq})
 
 
-async def _persist(sid: str, document: dict[str, Any]) -> None:
+async def _persist(sid: str, document: dict[str, Any], by_hand: bool = False) -> None:
     """Save a finished game and say how it went: `game_persisted` or `game_persist_failed`.
 
-    A failed write starts the background retry (unless one is already running).
+    While a save is in flight only a retry by hand writes again; anyone else just takes
+    over its answer. A failed write starts the background retry unless one is running.
     """
-    public_id = await gs.persist_if_finished(document)
-    await _say_persisted(sid, document, public_id)
-    if public_id is None:
-        _retry_persist_later(sid, document)
-
-
-def _retry_persist_later(sid: str, document: dict[str, Any]) -> None:
     game_id = document["game_id"]
     _persist_sids[game_id] = sid
-    if game_id in _persist_retries or not PERSIST_RETRY_DELAYS:
+    owner = game_id not in _persisting
+    if not owner and not by_hand:
         return
+    _persisting.add(game_id)
+    public_id: str | None = None
+    try:
+        public_id = await gs.persist_if_finished(document)
+    finally:
+        if owner:
+            _persisting.discard(game_id)
+        if public_id is None and game_id not in _persisting:
+            _retry_persist_later(document)
+    if game_id in _persisting:
+        await _say_persisted(_persist_sids.get(game_id, sid), document, public_id)
+    else:
+        await _say_persisted(_persist_sids.pop(game_id, sid), document, public_id)
+
+
+def _retry_persist_later(document: dict[str, Any]) -> None:
+    game_id = document["game_id"]
+    if not PERSIST_RETRY_DELAYS:
+        return
+    _persisting.add(game_id)
     identity = document["identity"]
     task = asyncio.get_running_loop().create_task(_persist_in_background(identity, game_id))
     _persist_retries[game_id] = task
 
 
 async def _persist_in_background(identity: str, game_id: str) -> None:
-    """Retry a failed save after each of `PERSIST_RETRY_DELAYS`, holding no lock meanwhile."""
+    """Retry a failed save after each of `PERSIST_RETRY_DELAYS`, holding no lock meanwhile.
+
+    The game leaves the in-flight set before the final answer, so a rejoin (or a retry by
+    hand that fails) while it is being sent starts a new save.
+    """
     try:
         document: dict[str, Any] | None = None
         public_id: str | None = None
-        for delay in PERSIST_RETRY_DELAYS:
-            await asyncio.sleep(delay)
-            document = await gs.load_owned(identity, game_id)
-            if document is None or document.get("persisted"):
-                return  # gone, or saved meanwhile (and that save was answered)
-            public_id = await gs.persist_if_finished(document)
-            if public_id:
-                break
+        try:
+            for delay in PERSIST_RETRY_DELAYS:
+                await asyncio.sleep(delay)
+                document = await gs.load_owned(identity, game_id)
+                if document is None or document.get("persisted"):
+                    return  # gone, or saved meanwhile (and that save was answered)
+                public_id = await gs.persist_if_finished(document)
+                if public_id:
+                    break
+        finally:
+            _persisting.discard(game_id)
+            _persist_retries.pop(game_id, None)
+            sid = _persist_sids.pop(game_id, "")
         if document is not None:
-            await _say_persisted(_persist_sids.get(game_id, ""), document, public_id)
+            await _say_persisted(sid, document, public_id)
     except Exception:  # pragma: no cover - logged; the client can still retry by hand
         logger.exception("Background save of a finished game failed.")
-    finally:
-        _persist_retries.pop(game_id, None)
-        _persist_sids.pop(game_id, None)
 
 
 async def _resave_if_unsaved(sid: str, document: dict[str, Any], finish: bool) -> None:
-    """Retry the save of a finished, unsaved game someone (re)joined, unless the
-    background retry is on it: then its answer goes to this sid."""
+    """Retry the save of a finished, unsaved game someone (re)joined, unless a save is
+    in flight: then its answer goes to this sid."""
     if document["engine"]["phase"] != "finished" or document.get("persisted"):
         return
     if persist_retry_in_flight(document["game_id"]):
@@ -307,7 +334,7 @@ async def retry_persist(sid: str, data: Any = None) -> None:
     except gs.GameError as exc:
         await _error(sid, exc.code, exc.message)
         return
-    await _persist(sid, document)
+    await _persist(sid, document, by_hand=True)
 
 
 @sio.event
