@@ -77,12 +77,29 @@ def test_credentials_are_percent_encoded(monkeypatch, password):
 def test_tls_is_required_by_default(monkeypatch):
     s = _pg_settings(monkeypatch)
     assert s.DB_REQUIRE_SSL is True
-    assert s.db_connect_args == {"options": "-c timezone=UTC", "sslmode": "require"}
+    assert s.db_connect_args == {
+        "options": "-c timezone=UTC",
+        "connect_timeout": 10,
+        "sslmode": "require",
+    }
 
 
 def test_sessions_always_run_in_utc(monkeypatch):
     s = _pg_settings(monkeypatch, DB_REQUIRE_SSL=False)
-    assert s.db_connect_args == {"options": "-c timezone=UTC"}
+    assert s.db_connect_args == {"options": "-c timezone=UTC", "connect_timeout": 10}
+
+
+def test_an_unreachable_server_fails_a_connection_after_10_seconds(monkeypatch):
+    """libpq's `connect_timeout`; never a `statement_timeout` (the pooled endpoint
+    may refuse startup options beyond the timezone)."""
+    s = _pg_settings(monkeypatch)
+    assert s.db_connect_args["connect_timeout"] == 10
+    assert "statement_timeout" not in s.db_connect_args["options"]
+
+
+def test_the_suite_reads_no_dotenv_file():
+    """`tests/conftest.py` sets `ENV_FILE` empty before `app` is imported."""
+    assert Settings.model_config["env_file"] is None
 
 
 @pytest.mark.parametrize(
