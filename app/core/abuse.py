@@ -29,9 +29,11 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------- REST
-REST_LIMIT = 600  # requests per address per REST_WINDOW, any REST route
+# Per-address caps are sized for a whole school behind one NAT address; the per-sid
+# limits below are the real guard against one misbehaving client.
+REST_LIMIT = 3000  # requests per address per REST_WINDOW, any REST route
 REST_WINDOW = 60.0
-HEAVY_LIMIT = 120  # requests per address per HEAVY_WINDOW to HEAVY_PATHS
+HEAVY_LIMIT = 600  # requests per address per HEAVY_WINDOW to HEAVY_PATHS
 HEAVY_WINDOW = 60.0
 #: Open to anyone, and each one runs the config validator or the engine, or opens
 #: backing-service connections. Paths without a trailing slash.
@@ -50,8 +52,8 @@ HEAVY_PATH_PATTERNS = (("/api/v1/games/id/", "/results"),)
 MAX_BODY_BYTES = 64 * 1024  # a full config is about 3 KB
 
 # --------------------------------------------------------------- Socket.IO
-MAX_SOCKETS_PER_IP = 50  # open connections per address
-CONNECT_LIMIT = 60  # connects per address per CONNECT_WINDOW
+MAX_SOCKETS_PER_IP = 400  # open connections per address
+CONNECT_LIMIT = 300  # connects per address per CONNECT_WINDOW
 CONNECT_WINDOW = 60.0
 EVENT_LIMIT = 20  # events per sid per EVENT_WINDOW; a real client sends one per click
 EVENT_WINDOW = 1.0
