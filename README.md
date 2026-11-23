@@ -7,13 +7,13 @@ FastAPI + Socket.IO backend for Lemony, a single-player lemonade-stand simulatio
 ```bash
 python3.11 -m venv venv
 ./venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-cp .env.example .env            # fill DB_* for a PostgreSQL 17 (and FIREBASE_SERVICE_ACCOUNT_JSON for Google sign-in)
+cp .env.example .env            # fill DB_* for a PostgreSQL 18 (and FIREBASE_SERVICE_ACCOUNT_JSON for Google sign-in)
 ./venv/bin/alembic upgrade head
 ./venv/bin/uvicorn app.main:application --reload --port 8080
 ```
 
 Tests run on SQLite and never read `.env`; the ones marked `dbschema` also run on a
-throwaway `postgres:17` through Testcontainers (needs Docker). CI
+throwaway `postgres:18` through Testcontainers (needs Docker). CI
 (`.github/workflows/ci.yml`) runs exactly these, then builds the Docker image; Render
 deploys only after it passes, and the container runs `alembic upgrade head` before it starts
 uvicorn (free Render instances have no pre-deploy command):

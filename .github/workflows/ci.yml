@@ -32,7 +32,7 @@ jobs:
         run: docker build -t lemony-backend:ci .
 
   # The same suite's PostgreSQL half: migrations, the committed DDL
-  # (db/schema.postgres.sql), live_games and a stored game on postgres:17 through
+  # (db/schema.postgres.sql), live_games and a stored game on postgres:18 through
   # Testcontainers (Docker is available on the hosted runner). pytest exits 5,
   # failing the job, if the marker ever selects no test.
   dbschema:

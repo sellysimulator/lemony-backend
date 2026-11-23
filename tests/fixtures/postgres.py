@@ -1,6 +1,6 @@
 """PostgreSQL through Testcontainers, for the `dbschema` tests.
 
-One `postgres:17` container per session with `alembic upgrade head` applied, and
+One `postgres:18` container per session with `alembic upgrade head` applied, and
 an engine built with the app's own connect args (`Settings.db_connect_args`).
 Every test starts on empty tables: the teardown truncates them all. Nothing
 here ever connects to a database named by `settings` or a `.env`.
@@ -26,7 +26,7 @@ from alembic import command
 from app.config import Settings
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = "postgres:17"
+IMAGE = "postgres:18"
 
 
 @dataclass
