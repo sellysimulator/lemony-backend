@@ -40,10 +40,16 @@ per cup (`at_price`, null when the price is refused). Without a `price` those th
 are absent.
 
 Saving a finished game: `game_persisted` when it is stored, `game_persist_failed`
-when the write failed (the client offers a retry, `retry_persist`; `resume_game`
-retries too). `create_game` retries the save of a finished, unsaved active game
-first and refuses with `UNSAVED_GAME` if it still fails, so no finished game is
-left behind unsaved.
+when the write failed (the client offers a retry, `retry_persist`). A failed write is
+also retried in the background, `PERSIST_RETRY_DELAYS` (2 s, 10 s, 30 s) apart, with
+no lock held while it waits or writes; the first success sends `game_persisted`, and
+if all fail `game_persist_failed` is sent again. Both go to the sid that last asked
+about the game (a reconnect's `resume_game` or `request_state` takes them over). One
+background retry runs per game: while it does, `resume_game` and `request_state`
+leave the save to it; otherwise they retry a finished, unsaved game's save themselves.
+Every write is idempotent on the game's `public_id`, so the game is stored once.
+`create_game` retries the save of a finished, unsaved active game first and refuses
+with `UNSAVED_GAME` if it still fails, so no finished game is left behind unsaved.
 
 Rate limits (`core/abuse.py`, applied by `guarded()`): past 20 events a second a
 sid's events are dropped unanswered, and so are its `preview_plan` requests past 5 a
@@ -53,6 +59,7 @@ with `error {code: "RATE_LIMITED", message}`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -85,9 +92,20 @@ async def _send_state(sid: str, document: dict[str, Any], full: bool = True) -> 
     )
 
 
-async def _persist(sid: str, document: dict[str, Any]) -> None:
-    """Save a finished game and say how it went: `game_persisted` or `game_persist_failed`."""
-    public_id = await gs.persist_if_finished(document)
+# Seconds before each background retry of a failed save (after the first attempt).
+PERSIST_RETRY_DELAYS: tuple[float, ...] = (2.0, 10.0, 30.0)
+# The background retry of each game whose save failed (a strong reference, so the task
+# is not collected mid-flight), and the sid its answer goes to: the latest one to ask.
+_persist_retries: dict[str, asyncio.Task[None]] = {}
+_persist_sids: dict[str, str] = {}
+
+
+def persist_retry_in_flight(game_id: str) -> bool:
+    return game_id in _persist_retries
+
+
+async def _say_persisted(sid: str, document: dict[str, Any], public_id: str | None) -> None:
+    """`game_persisted` or `game_persist_failed`; nothing for a game that is gone."""
     seq = await gs.bump_seq(document)
     if seq is None:
         return
@@ -97,6 +115,62 @@ async def _persist(sid: str, document: dict[str, Any]) -> None:
         )
     else:
         await socket_manager.emit_to_sid(sid, "game_persist_failed", {"seq": seq})
+
+
+async def _persist(sid: str, document: dict[str, Any]) -> None:
+    """Save a finished game and say how it went: `game_persisted` or `game_persist_failed`.
+
+    A failed write starts the background retry (unless one is already running).
+    """
+    public_id = await gs.persist_if_finished(document)
+    await _say_persisted(sid, document, public_id)
+    if public_id is None:
+        _retry_persist_later(sid, document)
+
+
+def _retry_persist_later(sid: str, document: dict[str, Any]) -> None:
+    game_id = document["game_id"]
+    _persist_sids[game_id] = sid
+    if game_id in _persist_retries or not PERSIST_RETRY_DELAYS:
+        return
+    identity = document["identity"]
+    task = asyncio.get_running_loop().create_task(_persist_in_background(identity, game_id))
+    _persist_retries[game_id] = task
+
+
+async def _persist_in_background(identity: str, game_id: str) -> None:
+    """Retry a failed save after each of `PERSIST_RETRY_DELAYS`, holding no lock meanwhile."""
+    try:
+        document: dict[str, Any] | None = None
+        public_id: str | None = None
+        for delay in PERSIST_RETRY_DELAYS:
+            await asyncio.sleep(delay)
+            document = await gs.load_owned(identity, game_id)
+            if document is None or document.get("persisted"):
+                return  # gone, or saved meanwhile (and that save was answered)
+            public_id = await gs.persist_if_finished(document)
+            if public_id:
+                break
+        if document is not None:
+            await _say_persisted(_persist_sids.get(game_id, ""), document, public_id)
+    except Exception:  # pragma: no cover - logged; the client can still retry by hand
+        logger.exception("Background save of a finished game failed.")
+    finally:
+        _persist_retries.pop(game_id, None)
+        _persist_sids.pop(game_id, None)
+
+
+async def _resave_if_unsaved(sid: str, document: dict[str, Any], finish: bool) -> None:
+    """Retry the save of a finished, unsaved game someone (re)joined, unless the
+    background retry is on it: then its answer goes to this sid."""
+    if document["engine"]["phase"] != "finished" or document.get("persisted"):
+        return
+    if persist_retry_in_flight(document["game_id"]):
+        _persist_sids[document["game_id"]] = sid
+    elif finish:
+        await _finish(sid, document)
+    else:
+        await _persist(sid, document)
 
 
 async def _finish(sid: str, document: dict[str, Any]) -> None:
@@ -156,8 +230,7 @@ async def resume_game(sid: str, data: Any = None) -> None:
         await socket_manager.emit_to_sid(sid, "no_active_game", {"seq": 0})
         return
     await _send_state(sid, document)
-    if document["engine"]["phase"] == "finished" and not document.get("persisted"):
-        await _finish(sid, document)  # retry a persistence that failed earlier
+    await _resave_if_unsaved(sid, document, finish=True)  # retry a save that failed earlier
 
 
 @sio.event
@@ -172,6 +245,7 @@ async def request_state(sid: str, data: Any = None) -> None:
         await _error(sid, exc.code, exc.message)
         return
     await _send_state(sid, document)
+    await _resave_if_unsaved(sid, document, finish=False)
 
 
 @sio.event

@@ -1,6 +1,8 @@
 """A finished game is never left behind unsaved: the client hears when a save fails, can
 retry it, and a new game is refused while the last one is still unsaved."""
 
+import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -149,3 +151,110 @@ async def test_persist_if_finished_returns_none_while_the_write_fails(db_down):
     finished = await state_svc.get_game(document["game_id"])
     assert finished is not None
     assert await gs.persist_if_finished(finished) is None and not finished["persisted"]
+
+
+# ------------------------------------------------------- background retries
+@pytest.fixture
+def retry_gate(monkeypatch) -> asyncio.Event:
+    """Background retries wait (no lock held) until the returned event is set."""
+    gate = asyncio.Event()
+
+    async def sleep(_delay: float) -> None:
+        await gate.wait()
+
+    monkeypatch.setattr(game, "PERSIST_RETRY_DELAYS", (2.0, 10.0, 30.0))
+    monkeypatch.setattr(game, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": sleep}))
+    return gate
+
+
+class FlakyDb:
+    """The first `failures` writes fail; `attempts` logs every write ("fail" / "ok")."""
+
+    def __init__(self, monkeypatch, failures: int) -> None:
+        self.failures = failures
+        self.attempts: list[str] = []
+        self._real = db_service.persist_finished_game
+        monkeypatch.setattr(db_service, "persist_finished_game", self.write)
+
+    def write(self, document: dict[str, Any], summary: dict[str, Any]) -> str | None:
+        if len(self.attempts) < self.failures:
+            self.attempts.append("fail")
+            return None
+        self.attempts.append("ok")
+        return self._real(document, summary)
+
+
+def stored_rows(game_id: str) -> int:
+    with SessionLocal() as db:
+        return len(db.execute(select(Game).where(Game.public_id == game_id)).all())
+
+
+def persisted_to(emits) -> list[tuple[str, str]]:
+    return [(sid, d["public_id"]) for sid, e, d in emits.events if e == "game_persisted"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_save_is_retried_in_the_background_and_stored_once(
+    emits, monkeypatch, retry_gate
+):
+    db = FlakyDb(monkeypatch, failures=2)
+    _, game_id = await finish_a_game(emits)
+    assert len(emits.of("game_persist_failed")) == 1 and game.persist_retry_in_flight(game_id)
+    assert db.attempts == ["fail"]
+
+    retry_gate.set()
+    await game._persist_retries[game_id]
+    assert db.attempts == ["fail", "fail", "ok"]
+    assert persisted_to(emits) == [("s1", game_id)]
+    assert stored_rows(game_id) == 1
+    stored = await state_svc.get_game(game_id)
+    assert stored is not None and stored["persisted"]
+    assert not game.persist_retry_in_flight(game_id)
+    seqs = [d["seq"] for _, e, d in emits.events if e != "plan_preview"]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+
+
+@pytest.mark.asyncio
+async def test_the_retry_answers_the_sid_that_rejoined(emits, monkeypatch, retry_gate):
+    db = FlakyDb(monkeypatch, failures=2)
+    guest, game_id = await finish_a_game(emits)
+    # A reconnect while the retry waits: no second write, and the answer goes to s2.
+    await connect("s2", {"guestId": guest})
+    await game.resume_game("s2", {"game_id": game_id})
+    await game.request_state("s2", {"game_id": game_id})
+    assert db.attempts == ["fail"]
+
+    retry_gate.set()
+    await game._persist_retries[game_id]
+    assert persisted_to(emits) == [("s2", game_id)]
+    assert stored_rows(game_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_when_every_retry_fails_the_client_hears_it_again(emits, monkeypatch, retry_gate):
+    db = FlakyDb(monkeypatch, failures=4)
+    _, game_id = await finish_a_game(emits)
+    retry_gate.set()
+    await game._persist_retries[game_id]
+    assert db.attempts == ["fail"] * 4  # the first write and three retries
+    assert len(emits.of("game_persist_failed")) == 2 and not emits.of("game_persisted")
+    assert stored_rows(game_id) == 0 and not game.persist_retry_in_flight(game_id)
+
+    # With no retry in flight, asking for the state tries the save again.
+    await game.request_state("s1", {"game_id": game_id})
+    assert persisted_to(emits) == [("s1", game_id)]
+    assert stored_rows(game_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_hand_retry_during_the_background_one_still_stores_once(
+    emits, monkeypatch, retry_gate
+):
+    FlakyDb(monkeypatch, failures=1)
+    _, game_id = await finish_a_game(emits)
+    await game.retry_persist("s1", {"game_id": game_id})  # saved before the retry wakes
+    assert persisted_to(emits) == [("s1", game_id)]
+    retry_gate.set()
+    await game._persist_retries[game_id]
+    assert persisted_to(emits) == [("s1", game_id)]  # it found the game saved: nothing more
+    assert stored_rows(game_id) == 1

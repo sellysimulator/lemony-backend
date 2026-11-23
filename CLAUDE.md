@@ -259,8 +259,12 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
   `weather.roll_day_weather` is `day_temperature` + `weathers_at` with the same two draws.
 - **Idempotency.** Every outbound event carries a per-game monotonic `seq` (the client drops
   stale ones), except `plan_preview`, a request-scoped reply matched by `request_id`. `submit_day` replays return the stored record with `duplicate=True` (and `events: None`);
-  `persist_if_finished` is safe to repeat; `resume_game` and `retry_persist` retry it, and
-  a failure is reported as `game_persist_failed`. `create_game` never abandons a finished,
+  `persist_if_finished` is safe to repeat; a failure is reported as `game_persist_failed`
+  and retried in the background (`game.py` `PERSIST_RETRY_DELAYS` = 2, 10, 30 s, one task
+  per game in `_persist_retries`, no lock held while it sleeps or writes; it answers the sid
+  that last asked, in `_persist_sids`); `retry_persist` retries at once, and `resume_game` /
+  `request_state` do when no background retry is running. Tests run with no background
+  retries (autouse `no_background_saves`); `test_save.py` gates them with `retry_gate`. `create_game` never abandons a finished,
   unsaved game: it retries the save and refuses with `UNSAVED_GAME` while it fails.
 - **Game formulas belong to the user.** Keep existing formulas; if one looks wrong, flag it
   as an explicit before/after proposal rather than rewriting it inside another change.

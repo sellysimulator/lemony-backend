@@ -56,6 +56,16 @@ def fresh_limits():
     yield
 
 
+@pytest.fixture(autouse=True)
+def no_background_saves(monkeypatch):
+    """A failed save starts no background retry unless a test sets the delays itself
+    (`tests/test_services/test_save.py`), so no task outlives its test's event loop."""
+    from app.sockets.handlers import game
+
+    monkeypatch.setattr(game, "PERSIST_RETRY_DELAYS", ())
+    yield
+
+
 class Recorder:
     def __init__(self) -> None:
         self.events: list[tuple[str, str, Any]] = []
