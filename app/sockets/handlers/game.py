@@ -29,15 +29,15 @@ Every server event carries a monotonic per-game `seq`, except `plan_preview`, a
 request-scoped reply that is not a state event. A game deleted while a request was
 being answered (abandoned, or replaced by a new game, from another tab) gets no more
 events: `bump_seq` returns None (and never saves it back) and the handler stops there.
-So a game abandoned between its last day and `game_finished` is not saved either. `session_token` is sent
-in exactly one event, `game_created`, to the creating sid.
+So a game abandoned between its last day and `game_finished` is not saved either.
+`session_token` is sent in exactly one event, `game_created`, to the creating sid.
 
 `plan_preview` carries every figure the plan screen shows (see `core/preview.py`): the
 spend, the cash after it, the units bought, which packs can still be added (`can_add`,
 per ingredient and size), and, for the price sent, the server's verdict on it
-(`price_error`, null when it is fine) and the curve at exactly that price with the margin
-per cup (`at_price`, null when the price is refused). Without a `price` those three keys
-are absent.
+(`price_error`, null when it is fine) and the curve at exactly that price with the
+margin per cup (`at_price`, null when the price is refused). Without a `price` those
+three keys are absent.
 
 Saving a finished game: `game_persisted` when it is stored, `game_persist_failed`
 when the write failed (the client offers a retry, `retry_persist`). A failed write is
@@ -58,7 +58,7 @@ Rate limits (`core/abuse.py`, applied by `guarded()`): past 20 events a second a
 sid's events are dropped unanswered, and so are its `preview_plan` requests past 5 a
 second; past 60 `create_game` a minute from one address, `create_game` is answered
 with `error {code: "RATE_LIMITED", message}`.
-"""
+"""  # noqa: E501 — the event table's rows cannot wrap
 
 from __future__ import annotations
 
@@ -91,7 +91,9 @@ async def _send_state(sid: str, document: dict[str, Any], full: bool = True) -> 
     if seq is None:
         return
     await socket_manager.emit_to_sid(
-        sid, "game_state", {"seq": seq, "full": full, "state": gs.public_state(document, full)}
+        sid,
+        "game_state",
+        {"seq": seq, "full": full, "state": gs.public_state(document, full)},
     )
 
 
@@ -110,7 +112,9 @@ def persist_retry_in_flight(game_id: str) -> bool:
     return game_id in _persisting
 
 
-async def _say_persisted(sid: str, document: dict[str, Any], public_id: str | None) -> None:
+async def _say_persisted(
+    sid: str, document: dict[str, Any], public_id: str | None
+) -> None:
     """`game_persisted` or `game_persist_failed`; nothing for a game that is gone."""
     seq = await gs.bump_seq(document)
     if seq is None:
@@ -124,7 +128,8 @@ async def _say_persisted(sid: str, document: dict[str, Any], public_id: str | No
 
 
 async def _persist(sid: str, document: dict[str, Any], by_hand: bool = False) -> None:
-    """Save a finished game and say how it went: `game_persisted` or `game_persist_failed`.
+    """Save a finished game and say how it went: `game_persisted` or
+    `game_persist_failed`.
 
     While a save is in flight only a retry by hand writes again; anyone else just takes
     over its answer. A failed write starts the background retry unless one is running.
@@ -155,15 +160,18 @@ def _retry_persist_later(document: dict[str, Any]) -> None:
         return
     _persisting.add(game_id)
     identity = document["identity"]
-    task = asyncio.get_running_loop().create_task(_persist_in_background(identity, game_id))
+    task = asyncio.get_running_loop().create_task(
+        _persist_in_background(identity, game_id)
+    )
     _persist_retries[game_id] = task
 
 
 async def _persist_in_background(identity: str, game_id: str) -> None:
-    """Retry a failed save after each of `PERSIST_RETRY_DELAYS`, holding no lock meanwhile.
+    """Retry a failed save after each of `PERSIST_RETRY_DELAYS`, holding no lock
+    meanwhile.
 
-    The game leaves the in-flight set before the final answer, so a rejoin (or a retry by
-    hand that fails) while it is being sent starts a new save.
+    The game leaves the in-flight set before the final answer, so a rejoin (or a retry
+    by hand that fails) while it is being sent starts a new save.
     """
     try:
         document: dict[str, Any] | None = None
@@ -234,7 +242,11 @@ async def create_game(sid: str, data: Any = None) -> None:
     await socket_manager.emit_to_sid(
         sid,
         "game_created",
-        {"seq": seq, "game_id": document["game_id"], "session_token": document["session_token"]},
+        {
+            "seq": seq,
+            "game_id": document["game_id"],
+            "session_token": document["session_token"],
+        },
     )
     await _send_state(sid, document)
 
@@ -257,7 +269,8 @@ async def resume_game(sid: str, data: Any = None) -> None:
         await socket_manager.emit_to_sid(sid, "no_active_game", {"seq": 0})
         return
     await _send_state(sid, document)
-    await _resave_if_unsaved(sid, document, finish=True)  # retry a save that failed earlier
+    # Retry a save that failed earlier
+    await _resave_if_unsaved(sid, document, finish=True)
 
 
 @sio.event
@@ -313,7 +326,9 @@ async def ack_day(sid: str, data: Any = None) -> None:
         return
     payload = _payload(data)
     try:
-        document = await gs.acknowledge_day(identity, payload.get("game_id"), payload.get("day"))
+        document = await gs.acknowledge_day(
+            identity, payload.get("game_id"), payload.get("day")
+        )
     except gs.GameError as exc:
         await _error(sid, exc.code, exc.message)
         return
@@ -349,7 +364,9 @@ async def abandon_game(sid: str, data: Any = None) -> None:
     except gs.GameError as exc:
         await _error(sid, exc.code, exc.message)
         return
-    await socket_manager.emit_to_sid(sid, "game_abandoned", {"seq": 0, "game_id": game_id})
+    await socket_manager.emit_to_sid(
+        sid, "game_abandoned", {"seq": 0, "game_id": game_id}
+    )
 
 
 @sio.event
@@ -365,7 +382,10 @@ async def preview_plan(sid: str, data: Any = None) -> None:
     if not isinstance(request_id, str) or not 1 <= len(request_id) <= 64:
         return
     day = payload.get("day")
-    reply: dict[str, Any] = {"request_id": request_id, "day": day if isinstance(day, int) else None}
+    reply: dict[str, Any] = {
+        "request_id": request_id,
+        "day": day if isinstance(day, int) else None,
+    }
     try:
         document = await gs.require_owned(identity, payload.get("game_id"))
         engine = gs.engine_of(document)
@@ -373,13 +393,22 @@ async def preview_plan(sid: str, data: Any = None) -> None:
             raise gs.GameError("INVALID_PLAN", "day must be a number")
         if engine.phase != "planning" or day != engine.day:
             raise gs.GameError("WRONG_DAY", f"It is day {engine.day}, not day {day}.")
-        # The price never refuses the preview: it is judged inside the reply (price_error).
+        # The price never refuses the preview: it is judged inside the reply
+        # (price_error).
         priced = payload.get("price") is not None
         try:
             plan = DayPlan.model_validate(
                 {
-                    **{k: payload.get(k) for k in ("purchases", "recipe") if k in payload},
-                    "price": payload["price"] if priced else engine.config.min_max_values.price.min,
+                    **{
+                        k: payload.get(k)
+                        for k in ("purchases", "recipe")
+                        if k in payload
+                    },
+                    "price": (
+                        payload["price"]
+                        if priced
+                        else engine.config.min_max_values.price.min
+                    ),
                 }
             )
         except ValidationError as exc:

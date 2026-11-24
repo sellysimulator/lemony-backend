@@ -39,8 +39,10 @@ def get_defaults() -> ConfigDefaultsResponse:
 
 
 def _customers_if_capped(config: dict[str, Any]) -> int | None:
-    """The busiest day's customers of a refused config that is valid apart from the cap on
-    them (so the screen can show how far over it is); None when anything else is wrong."""
+    """The busiest day's customers of a refused config that is valid apart from the cap
+    on them (so the screen can show how far over it is); None when anything else is
+    wrong.
+    """
     try:
         parsed = GameConfig.validate_uncapped(config)
     except ValidationError:
@@ -49,12 +51,15 @@ def _customers_if_capped(config: dict[str, Any]) -> int | None:
 
 
 def _ingredients_alone(config: dict[str, Any]) -> dict[str, dict[str, Any] | None]:
-    """Each ingredient's figures from its own settings, for a config that fails as a whole."""
+    """Each ingredient's figures from its own settings, for a config that fails as a
+    whole."""
     raw = config.get("ingredients")
     out: dict[str, dict[str, Any] | None] = {}
     for name in INGREDIENT_NAMES:
         try:
-            cfg = IngredientConfig.model_validate(raw.get(name) if isinstance(raw, dict) else None)
+            cfg = IngredientConfig.model_validate(
+                raw.get(name) if isinstance(raw, dict) else None
+            )
         except ValidationError:
             out[name] = None
         else:
@@ -83,7 +88,8 @@ def preview_config(config: dict[str, Any]) -> ConfigPreviewResponse:
         valid=True,
         customers_per_day=max_expected_customers(parsed),
         ingredients={
-            name: ingredient_preview(name, parsed.ingredients[name]) for name in INGREDIENT_NAMES
+            name: ingredient_preview(name, parsed.ingredients[name])
+            for name in INGREDIENT_NAMES
         },
         help=config_help(parsed),
     )

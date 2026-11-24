@@ -30,7 +30,12 @@ from app.core.preview import PRICE_STEP, plan_preview
 
 RECIPE = {"ice": 1, "sugar": 1, "lemons": 1}
 # Plenty of every ingredient for the default demand (about 100-250 visitors a day).
-BIG_STOCK = {"ice": {"500": 1}, "sugar": {"500": 1}, "lemons": {"500": 1}, "cups": {"500": 1}}
+BIG_STOCK = {
+    "ice": {"500": 1},
+    "sugar": {"500": 1},
+    "lemons": {"500": 1},
+    "cups": {"500": 1},
+}
 
 
 def make_game(seed: int = 7, edit: Any = None) -> LemonadeGame:
@@ -63,7 +68,9 @@ def grid(game: LemonadeGame) -> list[float]:
 
 
 def units_bought(purchases: dict[str, dict[str, int]]) -> dict[str, int]:
-    return {n: sum(int(s) * c for s, c in packs.items()) for n, packs in purchases.items()}
+    return {
+        n: sum(int(s) * c for s, c in packs.items()) for n, packs in purchases.items()
+    }
 
 
 def reference_cups_possible(game: LemonadeGame, plan: DayPlan) -> int:
@@ -80,8 +87,9 @@ def reference_cups_possible(game: LemonadeGame, plan: DayPlan) -> int:
 
 
 def reference_cost(game: LemonadeGame, plan: DayPlan) -> float | None:
-    """Cost per cup, written out: the cups possible, each ingredient used from held stock
-    oldest first at the price paid, then from today's packs dearest per unit first."""
+    """Cost per cup, written out: the cups possible, each ingredient used from held
+    stock oldest first at the price paid, then from today's packs dearest per unit
+    first."""
     possible = reference_cups_possible(game, plan)
     if possible == 0:
         return None
@@ -94,7 +102,9 @@ def reference_cost(game: LemonadeGame, plan: DayPlan) -> float | None:
             assert pack is not None
             today.append((int(size) * count, cfg.pack_price(pack) / int(size)))
         today.sort(key=lambda lot: -lot[1])
-        held = [(b.qty, game.inventory[name].paid(b)) for b in game.inventory[name].batches]
+        held = [
+            (b.qty, game.inventory[name].paid(b)) for b in game.inventory[name].batches
+        ]
         need = possible * (1 if name == "cups" else plan.recipe[name])
         for qty, unit in held + today:
             take = min(qty, need)
@@ -104,19 +114,23 @@ def reference_cost(game: LemonadeGame, plan: DayPlan) -> float | None:
 
 
 def reference_spend(game: LemonadeGame, purchases: dict[str, dict[str, int]]) -> float:
-    """What the packs cost, written out: each pack's price rounded to the cent, then the sum."""
+    """What the packs cost, written out: each pack's price rounded to the cent, then the
+    sum."""
     total = 0.0
     for name, packs in purchases.items():
         cfg = game.config.ingredients[name]
         for size, count in packs.items():
             pack = cfg.pack(int(size))
             assert pack is not None
-            total += round_cents(int(size) * cfg.unit_cost * (1 - pack.discount)) * count
+            total += (
+                round_cents(int(size) * cfg.unit_cost * (1 - pack.discount)) * count
+            )
     return round_cents(total)
 
 
 def reference_can_add(game: LemonadeGame, plan: DayPlan) -> dict[str, dict[str, bool]]:
-    """One more pack fits when it keeps the size under the daily cap and the cash covers it."""
+    """One more pack fits when it keeps the size under the daily cap and the cash covers
+    it."""
     out: dict[str, dict[str, bool]] = {}
     for name in ("ice", "sugar", "lemons", "cups"):
         out[name] = {}
@@ -130,7 +144,8 @@ def reference_can_add(game: LemonadeGame, plan: DayPlan) -> dict[str, dict[str, 
 
 
 def reference(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
-    """The spec, written out. Only for the default price range (a grid under 201 prices)."""
+    """The spec, written out. Only for the default price range (a grid under 201
+    prices)."""
     cfg = game.config
     weather, temperature = game.weather_for_day(game.day)
     multiplier = cfg.weather_multipliers[weather]
@@ -140,7 +155,9 @@ def reference(game: LemonadeGame, plan: DayPlan) -> dict[str, Any]:
     possible = reference_cups_possible(game, plan)
     cost = reference_cost(game, plan)
     weights = {
-        p.kind: sum(expected_spawn(p, h, weather, temperature, multiplier) for h in hours)
+        p.kind: sum(
+            expected_spawn(p, h, weather, temperature, multiplier) for h in hours
+        )
         for p in game.people
     }
     total = sum(weights.values())
@@ -181,7 +198,9 @@ def assert_matches(got: dict[str, Any], want: dict[str, Any]) -> None:
     assert got["cost_per_cup"] == want["cost_per_cup"]
     for key in ("spend", "cash_after", "units", "can_add"):
         assert got[key] == want[key], key
-    assert got["expected_visitors"] == pytest.approx(want["expected_visitors"], abs=1e-9)
+    assert got["expected_visitors"] == pytest.approx(
+        want["expected_visitors"], abs=1e-9
+    )
     for key in ("chance", "expected_cups", "expected_margin"):
         assert len(got[key]) == len(want["prices"])
         assert got[key] == pytest.approx(want[key], abs=1e-9), key
@@ -225,12 +244,16 @@ def test_preview_uses_the_played_days_popularity_and_todays_weather(monkeypatch)
     assert_matches(result, reference(game, plan))
     # Rainy and 3 degrees: far fewer visitors than the sunny default would bring.
     monkeypatch.setattr(game, "weather_for_day", lambda day: ("sunny", 30.0))
-    assert plan_preview(game, plan)["expected_visitors"] > 2 * result["expected_visitors"]
+    assert (
+        plan_preview(game, plan)["expected_visitors"] > 2 * result["expected_visitors"]
+    )
 
 
 def test_price_in_the_plan_is_ignored():
     game = make_game()
-    assert plan_preview(game, make_plan(price=0.2)) == plan_preview(game, make_plan(price=1.0))
+    assert plan_preview(game, make_plan(price=0.2)) == plan_preview(
+        game, make_plan(price=1.0)
+    )
 
 
 def test_rounding_places():
@@ -288,7 +311,8 @@ def test_201_prices_keep_the_five_cent_step():
     [
         (0.0, 10.05, 0.10),  # 202 prices at 0.05
         (0.2, 20.2, 0.10),  # 401 at 0.05, 201 at 0.10
-        (0.0, 29.9, 0.15),  # 0.10 gives 300 prices, 0.15 gives 200: smallest multiple that fits
+        # 0.10 gives 300 prices, 0.15 gives 200: smallest multiple that fits
+        (0.0, 29.9, 0.15),
     ],
 )
 def test_a_wide_range_widens_the_step_to_a_multiple_of_five_cents(lo, hi, step):
@@ -330,7 +354,8 @@ def test_cups_possible_floors_each_ingredient():
         },
         recipe={"ice": 3, "sugar": 2, "lemons": 4},
     )
-    assert plan_preview(game, plan)["cups_possible"] == 25  # lemons: 100 // 4; ice gives 33
+    # Lemons: 100 // 4; ice gives 33
+    assert plan_preview(game, plan)["cups_possible"] == 25
 
 
 def test_cups_possible_is_limited_by_the_cups_themselves():
@@ -343,11 +368,14 @@ def test_an_ingredient_with_a_zero_amount_does_not_limit():
         purchases={"sugar": {"100": 1}, "lemons": {"100": 1}, "cups": {"100": 1}},
         recipe={"ice": 0, "sugar": 1, "lemons": 1},
     )
-    assert plan_preview(make_game(), plan)["cups_possible"] == 100  # no ice bought, none needed
+    # No ice bought, none needed
+    assert plan_preview(make_game(), plan)["cups_possible"] == 100
 
 
 def test_stock_caps_the_expected_cups():
-    plan = make_plan(purchases={"ice": {"100": 1}, "sugar": {"100": 1}, "cups": {"100": 1}})
+    plan = make_plan(
+        purchases={"ice": {"100": 1}, "sugar": {"100": 1}, "cups": {"100": 1}}
+    )
     game = make_game()
     game.inventory["lemons"].add(3)
     result = plan_preview(game, plan)
@@ -377,12 +405,16 @@ def test_cost_per_cup_is_the_stock_cost_with_discounts_and_drives_the_margin():
     )
     result = plan_preview(game, plan)
     assert result["cups_possible"] == 100  # the 100 cups
-    # 200 lemons: the 40 old ones, then the dearer 100-pack, then 60 of the 20%-off 700-pack.
+    # 200 lemons: the 40 old ones, then the dearer 100-pack, then 60 of the 20%-off
+    # 700-pack.
     lemons = 40 * 0.02 + 100 * 0.05 + 60 * 0.04
     cost = round_cents((100 * 0.008 + 100 * 0.016 + lemons + 100 * 0.04) / 100)
     assert result["cost_per_cup"] == cost
     for price, cups, margin in zip(
-        result["prices"], result["expected_cups"], result["expected_margin"], strict=True
+        result["prices"],
+        result["expected_cups"],
+        result["expected_margin"],
+        strict=True,
     ):
         assert margin == pytest.approx(round_cents(cups * (price - cost)), abs=0.011)
 
@@ -470,7 +502,11 @@ def test_a_price_out_of_range_gets_run_days_message_and_no_point(price):
     preview = plan_preview(game, make_plan(), price)
     with pytest.raises(PlanError) as refused:
         game._validate_plan(make_plan(price=price))
-    assert preview["price_error"] == str(refused.value) == "Price must be between 0.20 and 1.00"
+    assert (
+        preview["price_error"]
+        == str(refused.value)
+        == "Price must be between 0.20 and 1.00"
+    )
     assert preview["at_price"] is None and preview["price"] is None
     assert preview["prices"]  # the curve is still there
 
@@ -514,11 +550,15 @@ def test_a_bad_recipe_or_purchase_raises_the_same_plan_error_as_run_day():
 
 def test_purchases_up_to_the_cash_in_hand_are_accepted():
     game = make_game()
-    game.cash = 4.5  # 100 sugar costs exactly 2.00, 100 cups 4.00: 6.00 is too much, 4.00 fits
+    # 100 sugar costs exactly 2.00, 100 cups 4.00: 6.00 is too much, 4.00 fits
+    game.cash = 4.5
     plan = make_plan(purchases={"cups": {"100": 1}})
-    assert plan_preview(game, plan)["cups_possible"] == 0  # accepted; nothing to put in the cups
+    # Accepted; nothing to put in the cups
+    assert plan_preview(game, plan)["cups_possible"] == 0
     with pytest.raises(PlanError):
-        plan_preview(game, make_plan(purchases={"cups": {"100": 1}, "sugar": {"100": 1}}))
+        plan_preview(
+            game, make_plan(purchases={"cups": {"100": 1}, "sugar": {"100": 1}})
+        )
 
 
 # ------------------------------------------------------------------- purity
@@ -548,11 +588,14 @@ def test_previews_do_not_change_what_run_day_does():
         plan_preview(previewed, other)
     assert previewed.run_day(plan) == twin.run_day(plan)
     assert previewed.to_payload() == twin.to_payload()
-    # And on the next day too: weather, arrivals and perishing all still replay the same way.
+    # And on the next day too: weather, arrivals and perishing all still replay the same
+    # way.
     for g in (twin, previewed):
         g.acknowledge_day(1)
     plan_preview(previewed, plan)
-    assert previewed.run_day(make_plan(purchases={})) == twin.run_day(make_plan(purchases={}))
+    assert previewed.run_day(make_plan(purchases={})) == twin.run_day(
+        make_plan(purchases={})
+    )
 
 
 def test_preview_draws_nothing_but_todays_weather(monkeypatch):
@@ -568,21 +611,35 @@ def test_preview_draws_nothing_but_todays_weather(monkeypatch):
         raise AssertionError("the preview must not draw, perish or consume")
 
     monkeypatch.setattr(game, "_rng", spy)
-    for name in ("random", "uniform", "gauss", "choice", "shuffle", "randint", "sample"):
+    for name in (
+        "random",
+        "uniform",
+        "gauss",
+        "choice",
+        "shuffle",
+        "randint",
+        "sample",
+    ):
         monkeypatch.setattr(random, name, boom)
     for method in ("end_of_day_perish", "consume", "add"):
         monkeypatch.setattr(Ingredient, method, boom)
     monkeypatch.setattr("app.core.demand.poisson", boom)
     monkeypatch.setattr("app.core.engine.poisson", boom)
     plan_preview(game, make_plan())
-    assert purposes in ([], ["1:weather"])  # today's weather, no customers/perish stream
+    # Today's weather, no customers/perish stream
+    assert purposes in ([], ["1:weather"])
 
 
 # ------------------------------------------------------------------ simulated days
 @pytest.mark.parametrize("weather, temperature", [("sunny", 30.0), ("cloudy", 20.0)])
-def test_expected_cups_match_the_mean_of_simulated_days(monkeypatch, weather, temperature):
+def test_expected_cups_match_the_mean_of_simulated_days(
+    monkeypatch, weather, temperature
+):
     monkeypatch.setattr(
-        LemonadeGame, "weather_for_day", lambda self, day: (weather, temperature), raising=True
+        LemonadeGame,
+        "weather_for_day",
+        lambda self, day: (weather, temperature),
+        raising=True,
     )
     probe = make_game(seed=0)
     plan = make_plan()

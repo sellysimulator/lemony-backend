@@ -63,7 +63,8 @@ Weather = Literal["sunny", "cloudy", "rainy", "snowy"]
 
 
 class _Strict(BaseModel):
-    # No NaN or infinity anywhere: JSON cannot carry them back to the client or into PostgreSQL.
+    # No NaN or infinity anywhere: JSON cannot carry them back to the client or into
+    # PostgreSQL.
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
@@ -104,20 +105,29 @@ class MinMaxValues(_Strict):
             if rng.min < 0 or rng.max > MAX_PER_CUP:
                 raise ValueError(f"{name} per cup must stay within 0-{MAX_PER_CUP}")
         if not (0 <= self.hour.min < self.hour.max <= MAX_HOUR):
-            raise ValueError(f"Opening hours must satisfy 0 <= open < close <= {MAX_HOUR}")
-        if self.temperature.min < MIN_TEMPERATURE or self.temperature.max > MAX_TEMPERATURE:
             raise ValueError(
-                f"Temperature range must stay within {MIN_TEMPERATURE}..{MAX_TEMPERATURE} °C"
+                f"Opening hours must satisfy 0 <= open < close <= {MAX_HOUR}"
+            )
+        if (
+            self.temperature.min < MIN_TEMPERATURE
+            or self.temperature.max > MAX_TEMPERATURE
+        ):
+            raise ValueError(
+                f"Temperature range must stay within {MIN_TEMPERATURE}.."
+                f"{MAX_TEMPERATURE} °C"
             )
         if self.temperature.min == self.temperature.max:
             raise ValueError("Temperature range must not be a single value")
         if self.price.min < 0 or self.price.max > MAX_PRICE or self.price.max <= 0:
-            raise ValueError(f"Price range must stay within 0-{MAX_PRICE} and max must be above 0")
+            raise ValueError(
+                f"Price range must stay within 0-{MAX_PRICE} and max must be above 0"
+            )
         return self
 
 
 class Tolerance(_Strict):
-    """How far below / above a preference a customer still accepts, down to a score of 0."""
+    """How far below / above a preference a customer still accepts, down to a score of
+    0."""
 
     below: float = Field(ge=0, le=MAX_TOLERANCE)
     above: float = Field(ge=0, le=MAX_TOLERANCE)
@@ -159,7 +169,8 @@ class PersonPreferences(_Strict):
 
 
 class PackOption(_Strict):
-    """One pack on sale: ``size`` units at ``unit_cost`` each, less ``discount`` (0-0.9)."""
+    """One pack on sale: ``size`` units at ``unit_cost`` each, less ``discount``
+    (0-0.9)."""
 
     size: int
     discount: float = 0.0
@@ -171,7 +182,9 @@ class PackOption(_Strict):
                 f"pack sizes must be between {MIN_PACK_SIZE} and {MAX_PACK_SIZE} units"
             )
         if not 0 <= self.discount <= MAX_PACK_DISCOUNT:
-            raise ValueError(f"pack discounts must be between 0% and {MAX_PACK_DISCOUNT:.0%}")
+            raise ValueError(
+                f"pack discounts must be between 0% and {MAX_PACK_DISCOUNT:.0%}"
+            )
         return self
 
 
@@ -185,7 +198,8 @@ class IngredientConfig(_Strict):
     @model_validator(mode="before")
     @classmethod
     def _legacy_pack_sizes(cls, data: Any) -> Any:
-        """Configs saved before pack discounts carry ``pack_sizes: [int]``; read them as undiscounted packs."""
+        """Configs saved before pack discounts carry ``pack_sizes: [int]``; read them as
+        undiscounted packs."""
         if isinstance(data, dict) and "pack_sizes" in data and "packs" not in data:
             sizes = data["pack_sizes"]
             data = {k: v for k, v in data.items() if k != "pack_sizes"}
@@ -215,12 +229,14 @@ class IngredientConfig(_Strict):
     def _window(self) -> IngredientConfig:
         if not self.never_perishes and self.fresh_days >= self.max_days:
             raise ValueError(
-                f"fresh days ({self.fresh_days}) must be less than max days ({self.max_days})"
+                f"fresh days ({self.fresh_days}) must be less than "
+                f"max days ({self.max_days})"
             )
         return self
 
 
-# The validation context key that turns the customers-per-day cap off (``validate_uncapped``).
+# The validation context key that turns the customers-per-day cap off
+# (``validate_uncapped``).
 _CUSTOMERS_CAP = "customers_cap"
 
 
@@ -235,10 +251,12 @@ class GameConfig(_Strict):
     starting_cash: float = Field(ge=0, le=MAX_STARTING_CASH)
     min_max_values: MinMaxValues
     # How much the recipe moves what customers will pay: a perfect cup raises it to
-    # budget x (1 + quality_swing), a cup they hate lowers it to budget x (1 - quality_swing).
+    # budget x (1 + quality_swing), a cup they hate lowers it to budget x (1 -
+    # quality_swing).
     quality_swing: float = Field(ge=0, le=MAX_SHARE)
     # Popularity before the first day with visitors. Each buy chance is scaled by
-    # (0.5 + popularity), so 0.5 is neutral. Defaulted so configs saved before it still load.
+    # (0.5 + popularity), so 0.5 is neutral. Defaulted so configs saved before it still
+    # load.
     starting_popularity: float = Field(default=0.5, ge=0, le=MAX_SHARE)
     people_preferences: dict[str, PersonPreferences]
     weather_multipliers: dict[str, float]
@@ -257,7 +275,8 @@ class GameConfig(_Strict):
         for name, mult in value.items():
             if not 0 <= mult <= MAX_WEATHER_MULTIPLIER:
                 raise ValueError(
-                    f"weather multiplier for {name} must be within 0-{MAX_WEATHER_MULTIPLIER}"
+                    f"weather multiplier for {name} must be within "
+                    f"0-{MAX_WEATHER_MULTIPLIER}"
                 )
         return value
 
@@ -282,10 +301,10 @@ class GameConfig(_Strict):
     def validate_uncapped(cls, data: Any) -> GameConfig:
         """Every rule but the cap on customers a day.
 
-        For a stored game's config, which was accepted when the game was created: the cap
-        applies only when a config is created or changed, so a game made before it, or
-        with a config it now refuses, still loads and plays. The config preview uses it
-        too, to show the figure of a config the cap refuses.
+        For a stored game's config, which was accepted when the game was created: the
+        cap applies only when a config is created or changed, so a game made before it,
+        or with a config it now refuses, still loads and plays. The config preview uses
+        it too, to show the figure of a config the cap refuses.
         """
         return cls.model_validate(data, context={_CUSTOMERS_CAP: False})
 
@@ -298,7 +317,8 @@ class GameConfig(_Strict):
                 rng: IntRange = getattr(mm, name)
                 if not rng.min <= pref <= rng.max:
                     raise ValueError(
-                        f"{ptype}: preferred {name} ({pref}) must be within {rng.min}-{rng.max}"
+                        f"{ptype}: preferred {name} ({pref}) must be within "
+                        f"{rng.min}-{rng.max}"
                     )
             if not mm.hour.min <= prefs.preferred_hour <= mm.hour.max:
                 raise ValueError(
@@ -307,13 +327,13 @@ class GameConfig(_Strict):
                 )
             if not mm.temperature.min <= prefs.preferred_degrees <= mm.temperature.max:
                 raise ValueError(
-                    f"{ptype}: preferred temperature ({prefs.preferred_degrees}) must be within "
-                    f"{mm.temperature.min}-{mm.temperature.max}"
+                    f"{ptype}: preferred temperature ({prefs.preferred_degrees}) must "
+                    f"be within {mm.temperature.min}-{mm.temperature.max}"
                 )
             if not mm.price.min <= prefs.average_expense <= mm.price.max:
                 raise ValueError(
-                    f"{ptype}: average expense ({prefs.average_expense}) must be within the "
-                    f"price range {mm.price.min}-{mm.price.max}"
+                    f"{ptype}: average expense ({prefs.average_expense}) must be "
+                    f"within the price range {mm.price.min}-{mm.price.max}"
                 )
         self._check_weather_coverage()
         if (info.context or {}).get(_CUSTOMERS_CAP, True):
@@ -332,14 +352,18 @@ class GameConfig(_Strict):
         if expected > MAX_CUSTOMERS_PER_DAY:
             raise ValueError(
                 f"Up to {expected:,} customers could come on the busiest day, over the "
-                f"limit of {MAX_CUSTOMERS_PER_DAY:,} a day. Lower the base visitors per "
-                "hour of the customer types, shorten the opening hours or lower the "
-                "weather traffic multipliers."
+                f"limit of {MAX_CUSTOMERS_PER_DAY:,} a day. Lower the base visitors "
+                "per hour of the customer types, shorten the opening hours or lower "
+                "the weather traffic multipliers."
             )
 
     def _check_weather_coverage(self) -> None:
-        """The weather ranges, together, must cover the temperature range with no gap."""
-        lo, hi = self.min_max_values.temperature.min, self.min_max_values.temperature.max
+        """The weather ranges, together, must cover the temperature range with no
+        gap."""
+        lo, hi = (
+            self.min_max_values.temperature.min,
+            self.min_max_values.temperature.max,
+        )
         spans = sorted(
             (max(r.min, lo), min(r.max, hi))
             for r in self.weather_temperature_ranges.values()

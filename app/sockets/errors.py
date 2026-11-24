@@ -38,8 +38,8 @@ def guarded(
     It is also the one place socket events are rate limited (`core/abuse.py`). Past
     `EVENT_LIMIT` events a second a sid's events are dropped unanswered: a real client
     sends one per click. With `per_sid`, the event also counts against that limiter per
-    sid, and one over it is dropped unanswered too. With `per_ip`, it counts against that
-    limiter per client address, and one over it is answered with `RATE_LIMITED`.
+    sid, and one over it is dropped unanswered too. With `per_ip`, it counts against
+    that limiter per client address, and one over it is answered with `RATE_LIMITED`.
 
     Apply it *under* `@sio.event`, so Socket.IO registers the wrapper:
 

@@ -186,7 +186,7 @@ python3.11 -m venv venv && ./venv/bin/pip install -r requirements.txt -r require
 cp .env.example .env
 ./venv/bin/uvicorn app.main:application --reload --port 8080   # `application`, NOT `app`
 ./venv/bin/ruff check app tests
-./venv/bin/black --check app tests  # line length 100, matches ruff (pyproject)
+./venv/bin/black --check app tests  # line length 88, matches ruff (pyproject)
 ./venv/bin/mypy app tests           # default strictness
 ./venv/bin/pytest -q -m "not dbschema" --cov   # SQLite; coverage floor 75 (pyproject)
 ./venv/bin/pytest -q -m dbschema    # PostgreSQL 18 via Testcontainers (needs Docker)

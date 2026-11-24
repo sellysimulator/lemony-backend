@@ -1,6 +1,7 @@
 """The server-default rule, checked on the models (no database needed): only the
 `TimestampMixin` columns get a database default (`now()`); every fact column is written
-explicitly by the app, so a missed write fails instead of storing a fact nobody played."""
+explicitly by the app, so a missed write fails instead of storing a fact nobody played.
+"""
 
 import app.models  # noqa: F401
 from app.db.base import Base

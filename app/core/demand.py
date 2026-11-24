@@ -56,23 +56,30 @@ from .weather import temperatures_by_weather
 
 
 def triangle_kernel(current: float, preferred: float, denominator: float) -> float:
-    """1 at the preference, falling linearly to 0 at ``denominator`` away; clamped to [0, 1]."""
+    """1 at the preference, falling linearly to 0 at ``denominator`` away; clamped to
+    [0, 1]."""
     if denominator <= 0:
         return 1.0 if current == preferred else 0.0
     return min(1.0, max(0.0, 1 - abs(current - preferred) / denominator))
 
 
 def temperature_score(person: PersonType, temperature: float) -> float:
-    """How much this type likes the day's temperature (0-1); its range sets the reach."""
-    return triangle_kernel(temperature, person.preferred_degrees, person.denominators.temperature)
+    """How much this type likes the day's temperature (0-1); its range sets the
+    reach."""
+    return triangle_kernel(
+        temperature, person.preferred_degrees, person.denominators.temperature
+    )
 
 
 def hour_score(person: PersonType, hour: int) -> float:
-    """How much this type likes being out at ``hour`` (0-1); the opening hours set the reach."""
+    """How much this type likes being out at ``hour`` (0-1); the opening hours set the
+    reach."""
     return triangle_kernel(hour, person.preferred_hour, person.denominators.hour)
 
 
-def spawn_bonus(person: PersonType, hour: int, weather: str, temperature: float) -> float:
+def spawn_bonus(
+    person: PersonType, hour: int, weather: str, temperature: float
+) -> float:
     temp_s = temperature_score(person, temperature)
     hour_s = hour_score(person, hour)
     weather_s = 1.0 if weather == person.preferred_weather else 0.0
@@ -80,26 +87,33 @@ def spawn_bonus(person: PersonType, hour: int, weather: str, temperature: float)
 
 
 def expected_spawn(
-    person: PersonType, hour: int, weather: str, temperature: float, weather_multiplier: float
+    person: PersonType,
+    hour: int,
+    weather: str,
+    temperature: float,
+    weather_multiplier: float,
 ) -> float:
     bonus = spawn_bonus(person, hour, weather, temperature)
     return person.spawn_per_hour * (1 + bonus) * weather_multiplier
 
 
 def max_expected_customers(config: GameConfig) -> int:
-    """The most customers one day can expect under ``config``, rounded up to a whole one.
+    """The most customers one day can expect under ``config``, rounded up to a whole
+    one.
 
-    The worst case, over every weather the config can deal (``temperatures_by_weather``),
-    of the expected arrivals ``run_day`` draws: ``expected_spawn`` summed over every person
-    type and opening hour (``poisson`` draws a count whose mean is that rate).
+    The worst case, over every weather the config can deal
+    (``temperatures_by_weather``), of the expected arrivals ``run_day`` draws:
+    ``expected_spawn`` summed over every person type and opening hour (``poisson`` draws
+    a count whose mean is that rate).
 
     A safe upper bound, not always the exact worst day: within a weather, each type is
     counted at the temperature it likes best (the highest ``temperature_score``) among
     those that weather comes with, while a real day has one temperature for every type.
     That never undercounts (``expected_spawn`` grows with the temperature score), and it
     is exact when the types' best temperatures coincide. It is over by less than a third
-    at worst (the temperature's share of the bonus); on the defaults it is 228 against an
-    exact 225.05. This is the figure the config screen shows and the cap is checked against.
+    at worst (the temperature's share of the bonus); on the defaults it is 228 against
+    an exact 225.05. This is the figure the config screen shows and the cap is checked
+    against.
     """
     people = build_people(config)
     hours = range(config.min_max_values.hour.min, config.min_max_values.hour.max + 1)
@@ -111,14 +125,18 @@ def max_expected_customers(config: GameConfig) -> int:
         total = 0.0
         for person in people:
             best = max(temperatures, key=partial(temperature_score, person))
-            total += sum(expected_spawn(person, hour, weather, best, multiplier) for hour in hours)
+            total += sum(
+                expected_spawn(person, hour, weather, best, multiplier)
+                for hour in hours
+            )
         worst = max(worst, total)
     # Float noise must not tip a whole number over: 225.00000000001 is 225.
     return math.ceil(worst - 1e-9)
 
 
 def poisson(rng: random.Random, lam: float) -> int:
-    """Poisson sample: Knuth for small means, normal approximation above 30 (halves up)."""
+    """Poisson sample: Knuth for small means, normal approximation above 30 (halves
+    up)."""
     if lam <= 0:
         return 0
     if lam > 30:
@@ -132,13 +150,16 @@ def poisson(rng: random.Random, lam: float) -> int:
         k += 1
 
 
-def asymmetric_kernel(current: float, preferred: float, below: float, above: float) -> float:
+def asymmetric_kernel(
+    current: float, preferred: float, below: float, above: float
+) -> float:
     """Like ``triangle_kernel`` with a separate reach under and over the preference."""
     return triangle_kernel(current, preferred, below if current < preferred else above)
 
 
 def ingredient_score(person: PersonType, name: str, amount: float) -> float:
-    """How much this type likes ``amount`` of one recipe ingredient (0-1), from its tolerances."""
+    """How much this type likes ``amount`` of one recipe ingredient (0-1), from its
+    tolerances."""
     below, above = getattr(person.tolerances, name)
     return asymmetric_kernel(amount, getattr(person, f"preferred_{name}"), below, above)
 
@@ -146,7 +167,8 @@ def ingredient_score(person: PersonType, name: str, amount: float) -> float:
 def ingredient_scores(person: PersonType, recipe: dict[str, int]) -> dict[str, float]:
     # Ice, sugar, lemons, in that order: refusal_reason breaks a tie on the first.
     return {
-        name: ingredient_score(person, name, recipe[name]) for name in ("ice", "sugar", "lemons")
+        name: ingredient_score(person, name, recipe[name])
+        for name in ("ice", "sugar", "lemons")
     }
 
 
@@ -159,7 +181,9 @@ def wtp_share(quality: float, quality_swing: float) -> float:
     return 1 + quality_swing * (2 * quality - 1)
 
 
-def willingness_to_pay(person: PersonType, quality: float, quality_swing: float) -> float:
+def willingness_to_pay(
+    person: PersonType, quality: float, quality_swing: float
+) -> float:
     return person.average_expense * wtp_share(quality, quality_swing)
 
 
@@ -191,7 +215,8 @@ NEUTRAL_POPULARITY = 0.5
 
 
 def popularity_factor(popularity: float) -> float:
-    """What every buy chance is multiplied by: ``0.5 + popularity`` (1 at NEUTRAL_POPULARITY)."""
+    """What every buy chance is multiplied by: ``0.5 + popularity`` (1 at
+    NEUTRAL_POPULARITY)."""
     return 0.5 + popularity
 
 
@@ -204,11 +229,11 @@ NOT_POPULAR = "not_popular"
 
 
 def refused_for_popularity(draw: float, base: float) -> bool:
-    """Whether a refusal was popularity's doing: the visitor's draw would have bought at a
-    neutral popularity (0.5), where the chance is ``base`` itself.
+    """Whether a refusal was popularity's doing: the visitor's draw would have bought at
+    a neutral popularity (0.5), where the chance is ``base`` itself.
 
-    Never true when popularity is 0.5 or more: the chance is then at least ``base``, so a
-    draw that refused is at least ``base`` too.
+    Never true when popularity is 0.5 or more: the chance is then at least ``base``, so
+    a draw that refused is at least ``base`` too.
     """
     return draw < base
 
@@ -219,9 +244,10 @@ def refusal_reason(
     """Why a customer said no to the price and recipe, phrased for the player.
 
     The engine asks only when popularity did not cause the refusal
-    (``refused_for_popularity``). Under the suspicious floor it is the price. Otherwise the price is blamed when
-    it sits further over the budget (in units of the price tolerance) than the
-    worst ingredient sits under a perfect score; else that ingredient is.
+    (``refused_for_popularity``). Under the suspicious floor it is the price. Otherwise
+    the price is blamed when it sits further over the budget (in units of the price
+    tolerance) than the worst ingredient sits under a perfect score; else that
+    ingredient is.
     """
     if price < cheap_floor(person):
         return "too_cheap"

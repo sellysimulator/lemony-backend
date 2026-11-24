@@ -20,7 +20,12 @@ from app.core.config_preview import (
     ingredient_preview,
     typical_temperature,
 )
-from app.core.defaults import INGREDIENT_NAMES, PERSON_TYPES, WEATHER_TYPES, default_config
+from app.core.defaults import (
+    INGREDIENT_NAMES,
+    PERSON_TYPES,
+    WEATHER_TYPES,
+    default_config,
+)
 from app.core.demand import (
     apply_popularity,
     buy_probability,
@@ -38,7 +43,12 @@ from app.core.engine import LemonadeGame
 from app.core.ingredients import Ingredient, pack_offers
 from app.core.money import round_cents
 from app.core.plans import on_price_step, opening_plan, sample_plan, typical_plan
-from app.core.weather import day_temperature, roll_day_weather, weather_odds, weathers_at
+from app.core.weather import (
+    day_temperature,
+    roll_day_weather,
+    weather_odds,
+    weathers_at,
+)
 
 
 def make_config(edit: Any = None) -> GameConfig:
@@ -55,7 +65,9 @@ def _odds_by_sweep(config: GameConfig, points: int = 200_000) -> dict[str, float
     hi = config.min_max_values.temperature.max
     odds = {w: 0.0 for w in WEATHER_TYPES}
     for i in range(points):
-        matches = weathers_at(config, day_temperature(config, lo + (i + 0.5) * (hi - lo) / points))
+        matches = weathers_at(
+            config, day_temperature(config, lo + (i + 0.5) * (hi - lo) / points)
+        )
         for w in matches:
             odds[w] += 1 / points / len(matches)
     return odds
@@ -84,7 +96,8 @@ def test_weather_odds_are_the_engines_draw(edit):
 
 def test_the_sliver_under_a_bound_off_the_grid_is_the_bound_itself():
     config = make_config(_edges)
-    # 10.2 to 10.25 rounds to 10.0, which the range keeps as 10.2: snowy (and rainy) then.
+    # 10.2 to 10.25 rounds to 10.0, which the range keeps as 10.2: snowy (and rainy)
+    # then.
     assert day_temperature(config, 10.22) == 10.2
     assert weathers_at(config, 10.2) == ["rainy", "snowy"]
     assert weather_odds(config)["snowy"] == pytest.approx(0.05 / 20.1 / 2)
@@ -103,33 +116,51 @@ def test_roll_day_weather_draws_as_before():
 
 def test_no_matching_range_takes_the_nearest_and_a_tie_the_first_weather():
     base = make_config()
-    ranges = {"sunny": (30, 40), "cloudy": (0, 10), "rainy": (20, 29), "snowy": (12, 18)}
+    ranges = {
+        "sunny": (30, 40),
+        "cloudy": (0, 10),
+        "rainy": (20, 29),
+        "snowy": (12, 18),
+    }
     # Copied without validation: a valid config never leaves a temperature uncovered.
     config = base.model_copy(
         update={
             "weather_temperature_ranges": {
-                w: FloatRange.model_construct(min=lo, max=hi) for w, (lo, hi) in ranges.items()
+                w: FloatRange.model_construct(min=lo, max=hi)
+                for w, (lo, hi) in ranges.items()
             }
         }
     )
     assert weathers_at(config, 29.6) == ["sunny"]  # 0.4 from sunny, 0.6 from rainy
-    assert weathers_at(config, 11) == ["cloudy"]  # 1 from cloudy and snowy: cloudy is listed first
-    assert weathers_at(config, 19) == ["rainy"]  # 1 from snowy and rainy: rainy is listed first
+    # 1 from cloudy and snowy: cloudy is listed first
+    assert weathers_at(config, 11) == ["cloudy"]
+    # 1 from snowy and rainy: rainy is listed first
+    assert weathers_at(config, 19) == ["rainy"]
 
 
 # ------------------------------------------------------------------ plans
 def test_plans_on_the_default_config():
     config = make_config()
     # Mid-range: (0+5)/2 rounds up to 3, lemons (1+5)/2 = 3; price (0.2+1)/2 = 0.6.
-    assert sample_plan(config) == {"price": 0.6, "recipe": {"ice": 3, "sugar": 3, "lemons": 3}}
+    assert sample_plan(config) == {
+        "price": 0.6,
+        "recipe": {"ice": 3, "sugar": 3, "lemons": 3},
+    }
     # Average favourites 1, 1.5 -> 2, 2; average budget 0.5625 -> 0.55.
-    assert typical_plan(config) == {"price": 0.55, "recipe": {"ice": 1, "sugar": 2, "lemons": 2}}
-    assert opening_plan(config) == {"price": 0.55, "recipe": {"ice": 3, "sugar": 3, "lemons": 3}}
+    assert typical_plan(config) == {
+        "price": 0.55,
+        "recipe": {"ice": 1, "sugar": 2, "lemons": 2},
+    }
+    assert opening_plan(config) == {
+        "price": 0.55,
+        "recipe": {"ice": 3, "sugar": 3, "lemons": 3},
+    }
 
 
 def test_on_price_step_rounds_halves_up_and_stays_in_range():
     config = make_config()
-    assert on_price_step(config, 0.575) == 0.6  # 11.499999999999998 steps without the trim
+    # 11.499999999999998 steps without the trim
+    assert on_price_step(config, 0.575) == 0.6
     assert on_price_step(config, 0.574) == 0.55
     assert on_price_step(config, 0.01) == 0.2
     assert on_price_step(config, 7) == 1.0
@@ -143,7 +174,9 @@ def test_pack_offers_price_every_pack_as_a_purchase_does():
     for offer, pack in zip(offers, cfg.packs, strict=True):
         assert offer["price"] == cfg.pack_price(pack)
         assert offer["unit_price"] == round(cfg.pack_price(pack) / pack.size, 6)
-        assert offer["saving"] == round_cents(pack.size * cfg.unit_cost - offer["price"])
+        assert offer["saving"] == round_cents(
+            pack.size * cfg.unit_cost - offer["price"]
+        )
         assert offer["dearer_than"] is None
 
 
@@ -159,7 +192,8 @@ def test_a_bigger_pack_dearer_per_unit_names_the_smaller_cheaper_one():
         max_days=1,
     )
     dearer = {o["size"]: o["dearer_than"] for o in pack_offers(cfg)}
-    assert dearer == {10: None, 20: None, 50: 20}  # both are cheaper: the deeper discount
+    # Both are cheaper: the deeper discount
+    assert dearer == {10: None, 20: None, 50: 20}
 
 
 # ------------------------------------------------------------------ ingredient figures
@@ -168,7 +202,9 @@ def test_spoilage_figures_are_the_engines_hazard():
     figures = ingredient_preview("lemons", cfg)
     stock = Ingredient.from_config("lemons", cfg)
     assert len(figures["hazard"]) == SPOILAGE_NIGHTS
-    assert figures["hazard"] == [round(stock.hazard(n), 6) for n in range(1, SPOILAGE_NIGHTS + 1)]
+    assert figures["hazard"] == [
+        round(stock.hazard(n), 6) for n in range(1, SPOILAGE_NIGHTS + 1)
+    ]
     assert figures["survival"][0] == 1
     for n in range(1, SPOILAGE_NIGHTS + 1):
         assert figures["survival"][n] == pytest.approx(
@@ -185,7 +221,9 @@ def test_break_even_units_of_the_biggest_pack():
     figures = ingredient_preview("lemons", make_config().ingredients["lemons"])
     # 700 lemons at 20% off cost 28.00; at 0.05 each that buys 560 lemons.
     assert figures["break_even_units"] == 560
-    single = IngredientConfig(unit_cost=0.1, packs=[{"size": 10}], fresh_days=0, max_days=1)
+    single = IngredientConfig(
+        unit_cost=0.1, packs=[{"size": 10}], fresh_days=0, max_days=1
+    )
     assert ingredient_preview("ice", single)["break_even_units"] is None
 
 
@@ -234,12 +272,15 @@ def test_person_figures_are_the_demand_functions(defaults):
     grids, typical = h["grids"], h["plans"]["typical"]
     for person in LemonadeGame(config, 0).people:
         f = h["people"][person.kind]
-        assert f["hour_score"] == [round(hour_score(person, x), 6) for x in grids["hours"]]
+        assert f["hour_score"] == [
+            round(hour_score(person, x), 6) for x in grids["hours"]
+        ]
         assert f["temperature_score"] == [
             round(temperature_score(person, t), 6) for t in grids["temperatures"]
         ]
         assert f["ingredient_score"]["sugar"] == [
-            round(ingredient_score(person, "sugar", a), 6) for a in grids["per_cup"]["sugar"]
+            round(ingredient_score(person, "sugar", a), 6)
+            for a in grids["per_cup"]["sugar"]
         ]
         scores = ingredient_scores(person, typical["recipe"])
         wtp = willingness_to_pay(person, recipe_quality(scores), config.quality_swing)
@@ -249,7 +290,9 @@ def test_person_figures_are_the_demand_functions(defaults):
             "quality": round(recipe_quality(scores), 6),
             "wtp": round_cents(wtp),
             "chance": round(chance, 6),
-            "reason": refusal_reason(person, typical["price"], typical["recipe"], scores),
+            "reason": refusal_reason(
+                person, typical["price"], typical["recipe"], scores
+            ),
         }
         assert f["popularity_chance"] == [
             round(apply_popularity(chance, x), 6) for x in grids["popularity"]
@@ -263,7 +306,9 @@ def test_person_figures_are_the_demand_functions(defaults):
             round_cents(best + reach),
         )
         for probe in f["favourite_probes"]:
-            assert probe["chance"] == round(buy_probability(person, probe["price"], best), 6)
+            assert probe["chance"] == round(
+                buy_probability(person, probe["price"], best), 6
+            )
 
 
 def test_favourite_chance_is_every_types_chance_for_one_types_favourite_cup(defaults):
@@ -284,10 +329,29 @@ def test_popularity_and_quality_swing(defaults):
     _, h = defaults
     assert h["quality_swing"] == {"best": 1.4, "average": 1.0, "worst": 0.6}
     assert h["popularity"]["start_factor"] == 1.0
-    assert [p["popularity"] for p in h["popularity"]["probes"]] == [0, 0.25, 0.5, 0.75, 1]
-    assert [p["factor"] for p in h["popularity"]["probes"]] == [0.5, 0.75, 1.0, 1.25, 1.5]
+    assert [p["popularity"] for p in h["popularity"]["probes"]] == [
+        0,
+        0.25,
+        0.5,
+        0.75,
+        1,
+    ]
+    assert [p["factor"] for p in h["popularity"]["probes"]] == [
+        0.5,
+        0.75,
+        1.0,
+        1.25,
+        1.5,
+    ]
     custom = config_help(make_config(lambda d: d.update(starting_popularity=0.3)))
-    assert [p["popularity"] for p in custom["popularity"]["probes"]] == [0, 0.25, 0.3, 0.5, 0.75, 1]
+    assert [p["popularity"] for p in custom["popularity"]["probes"]] == [
+        0,
+        0.25,
+        0.3,
+        0.5,
+        0.75,
+        1,
+    ]
 
 
 def test_cup_cost_examples_are_the_engines_day_one(defaults):
@@ -300,7 +364,11 @@ def test_cup_cost_examples_are_the_engines_day_one(defaults):
         assert example["purchases"] == purchases
         spend, _, lots = game.purchase_cost(purchases)
         cups, cost = game.cup_cost(sample["recipe"], lots)
-        assert (example["spend"], example["cups_possible"], example["cost_per_cup"]) == (
+        assert (
+            example["spend"],
+            example["cups_possible"],
+            example["cost_per_cup"],
+        ) == (
             spend,
             cups,
             cost,

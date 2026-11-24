@@ -31,10 +31,11 @@ os.environ.update(
     }
 )
 
-import app.models  # noqa: F401
-from app.db.base import Base
-from app.db.session import engine
-from tests.fixtures.postgres import db_sessions, pg, pg_sessions  # noqa: F401
+# E402: `app` must be imported after the environment above is set.
+import app.models  # noqa: E402, F401
+from app.db.base import Base  # noqa: E402
+from app.db.session import engine  # noqa: E402
+from tests.fixtures.postgres import db_sessions, pg, pg_sessions  # noqa: E402, F401
 
 
 @pytest.fixture(autouse=True)

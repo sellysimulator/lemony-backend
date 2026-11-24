@@ -23,7 +23,8 @@ AUTH = {"Authorization": "Bearer tok"}
 
 @pytest.fixture
 def stats_down(monkeypatch) -> dict[str, Any]:
-    """While `down["on"]` is true every stats recompute fails; `down["calls"]` counts them."""
+    """While `down["on"]` is true every stats recompute fails; `down["calls"]` counts
+    them."""
     down: dict[str, Any] = {"on": True, "calls": 0}
     real = stats_service.recompute_user_stats
 
@@ -69,7 +70,9 @@ def test_a_stats_failure_leaves_the_game_saved_and_returns_its_id(stats_down, ca
     assert game.public_id == "f" * 32 and game.user_id is not None and stats is None
     assert "Failed to persist finished game." not in caplog.text
     assert "Failed to recompute player stats" in caplog.text
-    assert f"user_id={game.user_id}" in caplog.text and f"game={'f' * 32}" in caplog.text
+    assert (
+        f"user_id={game.user_id}" in caplog.text and f"game={'f' * 32}" in caplog.text
+    )
     assert UID not in caplog.text  # the Firebase uid is never logged
 
     # A retry of the save finds the stored game, keeps its id and recomputes the stats.
@@ -82,8 +85,10 @@ def test_a_stats_failure_leaves_the_game_saved_and_returns_its_id(stats_down, ca
 def test_a_game_another_writer_stored_first_still_gets_its_stats(
     monkeypatch: pytest.MonkeyPatch, stats_down: dict[str, Any]
 ) -> None:
-    """Another writer saves the same game between our lookup and our INSERT, and its stats
-    recompute fails: ours hits the duplicate, returns the stored id and fixes the stats."""
+    """Another writer saves the same game between our lookup and our INSERT, and its
+    stats recompute fails: ours hits the duplicate, returns the stored id and fixes the
+    stats.
+    """
     document = finished_document(identity=UID)
     summary = gs.engine_of(document).summary()
     real_ensure = db_service._users.ensure_user
@@ -102,7 +107,9 @@ def test_a_game_another_writer_stored_first_still_gets_its_stats(
     assert db_service.persist_finished_game(document, summary) == document["game_id"]
     assert other == {"saved": document["game_id"], "stats": None}
     [game], stats = stored()
-    assert stats is not None and stats.games_played == 1 and stats.best_game_id == game.id
+    assert (
+        stats is not None and stats.games_played == 1 and stats.best_game_id == game.id
+    )
 
 
 def test_reading_the_stats_rebuilds_missing_stats(stats_down, client):
@@ -154,7 +161,9 @@ def test_a_failed_repair_serves_the_stored_stats_and_the_next_read_retries(
     assert "Failed to repair player stats" in caplog.text
 
     stats_down["on"] = False
-    assert client.get("/api/v1/users/me/stats", headers=AUTH).json()["games_played"] == 2
+    assert (
+        client.get("/api/v1/users/me/stats", headers=AUTH).json()["games_played"] == 2
+    )
 
 
 def test_a_failed_repair_with_no_stats_stored_serves_empty_stats(stats_down, client):
@@ -163,18 +172,24 @@ def test_a_failed_repair_with_no_stats_stored_serves_empty_stats(stats_down, cli
     assert response.status_code == 200 and response.json()["games_played"] == 0
 
 
-def test_a_claim_is_kept_when_its_stats_fail_and_reading_them_repairs_them(stats_down, client):
+def test_a_claim_is_kept_when_its_stats_fail_and_reading_them_repairs_them(
+    stats_down, client
+):
     guest = new_guest()
     assert save(identity=guest) == "f" * 32
     assert client.post("/api/v1/users/upsert", json={}, headers=AUTH).status_code == 200
 
-    response = client.post("/api/v1/games/claim", json={"guest_identity": guest}, headers=AUTH)
+    response = client.post(
+        "/api/v1/games/claim", json={"guest_identity": guest}, headers=AUTH
+    )
     assert response.status_code == 200 and response.json() == {"claimed": 1}
     [game], stats = stored()
     assert game.guest_identity is None and game.user_id is not None and stats is None
 
     stats_down["on"] = False
-    assert client.get("/api/v1/users/me/stats", headers=AUTH).json()["games_played"] == 1
+    assert (
+        client.get("/api/v1/users/me/stats", headers=AUTH).json()["games_played"] == 1
+    )
 
 
 def test_a_claim_updates_the_stats_at_once(client):
@@ -189,7 +204,9 @@ def test_a_claim_updates_the_stats_at_once(client):
 
 
 def test_rest_timestamps_are_utc_with_a_z(client):
-    created = client.post("/api/v1/users/upsert", json={}, headers=AUTH).json()["created_at"]
+    created = client.post("/api/v1/users/upsert", json={}, headers=AUTH).json()[
+        "created_at"
+    ]
     assert created.endswith("Z") and "+" not in created
     assert save() == "f" * 32
     [item] = client.get("/api/v1/users/me/games", headers=AUTH).json()["items"]
@@ -197,5 +214,7 @@ def test_rest_timestamps_are_utc_with_a_z(client):
         "2026-10-22T09:00:00Z",
         "2026-10-22T09:30:00Z",
     )
-    detail = client.get(f"/api/v1/users/me/games/{item['public_id']}", headers=AUTH).json()
+    detail = client.get(
+        f"/api/v1/users/me/games/{item['public_id']}", headers=AUTH
+    ).json()
     assert detail["started_at"] == "2026-10-22T09:00:00Z"

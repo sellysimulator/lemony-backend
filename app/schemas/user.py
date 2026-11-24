@@ -75,21 +75,24 @@ class ConfigDefaultsResponse(BaseModel):
     weather_types: list[str]
     person_types: list[str]
     ingredient_names: list[str]
-    # Every bound the config and plan screens show or enforce: `core/limits.public_limits()`.
+    # Every bound the config and plan screens show or enforce:
+    # `core/limits.public_limits()`.
     limits: dict[str, dict[str, float] | float]
 
 
 class ConfigPreviewResponse(BaseModel):
-    """`POST /config/preview`: the verdict and every figure the config screen and help show.
+    """`POST /config/preview`: the verdict and every figure the config screen and help
+    show.
 
-    `ingredients` holds each ingredient's own figures (`core/config_preview.ingredient_preview`),
-    or null when that ingredient's settings are invalid, so the packs and spoilage keep
-    their figures while another part of the config is being fixed. `help` (the figures of
-    `config_preview.config_help`) needs the whole config to be valid, else it is null.
-    `customers_per_day` is the most customers one day can expect
-    (`demand.max_expected_customers`, capped at `limits.customers_per_day.max`). It is sent
-    whenever the config is valid apart from that cap, so with `valid: false` it means the
-    cap refused the config (`message` says so); it is null when anything else is invalid.
+    `ingredients` holds each ingredient's own figures
+    (`core/config_preview.ingredient_preview`), or null when that ingredient's settings
+    are invalid, so the packs and spoilage keep their figures while another part of the
+    config is being fixed. `help` (the figures of `config_preview.config_help`) needs
+    the whole config to be valid, else it is null. `customers_per_day` is the most
+    customers one day can expect (`demand.max_expected_customers`, capped at
+    `limits.customers_per_day.max`). It is sent whenever the config is valid apart from
+    that cap, so with `valid: false` it means the cap refused the config (`message` says
+    so); it is null when anything else is invalid.
     """
 
     valid: bool

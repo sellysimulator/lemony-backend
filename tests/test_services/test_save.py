@@ -21,7 +21,8 @@ from .test_play import PLAN, config, connect
 
 @pytest.fixture
 def db_down(monkeypatch) -> dict[str, bool]:
-    """While `down["on"]` is true every save fails, as a lost database connection does."""
+    """While `down["on"]` is true every save fails, as a lost database connection
+    does."""
     down = {"on": True}
     real = db_service.persist_finished_game
 
@@ -65,7 +66,9 @@ async def test_a_failed_save_is_reported_and_a_retry_saves_it(emits, db_down):
 
 
 @pytest.mark.asyncio
-async def test_a_new_game_never_abandons_a_finished_game_that_is_not_saved(emits, db_down):
+async def test_a_new_game_never_abandons_a_finished_game_that_is_not_saved(
+    emits, db_down
+):
     guest, game_id = await finish_a_game(emits)
 
     await game.create_game("s1", {"config": config(2)})
@@ -120,7 +123,9 @@ async def test_retry_is_refused_for_an_unfinished_game_or_someone_elses(emits):
 
 
 @pytest.mark.asyncio
-async def test_a_stats_failure_never_fails_the_save(emits, firebase_tokens, monkeypatch):
+async def test_a_stats_failure_never_fails_the_save(
+    emits, firebase_tokens, monkeypatch
+):
     def broken(db: Any, user_id: int) -> None:
         raise RuntimeError("stats are broken")
 
@@ -163,7 +168,9 @@ def retry_gate(monkeypatch) -> asyncio.Event:
         await gate.wait()
 
     monkeypatch.setattr(game, "PERSIST_RETRY_DELAYS", (2.0, 10.0, 30.0))
-    monkeypatch.setattr(game, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": sleep}))
+    monkeypatch.setattr(
+        game, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": sleep})
+    )
     return gate
 
 
@@ -190,7 +197,9 @@ def stored_rows(game_id: str) -> int:
 
 
 def persisted_to(emits) -> list[tuple[str, str]]:
-    return [(sid, d["public_id"]) for sid, e, d in emits.events if e == "game_persisted"]
+    return [
+        (sid, d["public_id"]) for sid, e, d in emits.events if e == "game_persisted"
+    ]
 
 
 @pytest.mark.asyncio
@@ -199,7 +208,9 @@ async def test_a_failed_save_is_retried_in_the_background_and_stored_once(
 ):
     db = FlakyDb(monkeypatch, failures=2)
     _, game_id = await finish_a_game(emits)
-    assert len(emits.of("game_persist_failed")) == 1 and game.persist_retry_in_flight(game_id)
+    assert len(emits.of("game_persist_failed")) == 1 and game.persist_retry_in_flight(
+        game_id
+    )
     assert db.attempts == ["fail"]
 
     retry_gate.set()
@@ -231,7 +242,9 @@ async def test_the_retry_answers_the_sid_that_rejoined(emits, monkeypatch, retry
 
 
 @pytest.mark.asyncio
-async def test_when_every_retry_fails_the_client_hears_it_again(emits, monkeypatch, retry_gate):
+async def test_when_every_retry_fails_the_client_hears_it_again(
+    emits, monkeypatch, retry_gate
+):
     db = FlakyDb(monkeypatch, failures=4)
     _, game_id = await finish_a_game(emits)
     retry_gate.set()
@@ -256,12 +269,15 @@ async def test_a_hand_retry_during_the_background_one_still_stores_once(
     assert persisted_to(emits) == [("s1", game_id)]
     retry_gate.set()
     await game._persist_retries[game_id]
-    assert persisted_to(emits) == [("s1", game_id)]  # it found the game saved: nothing more
+    # It found the game saved: nothing more
+    assert persisted_to(emits) == [("s1", game_id)]
     assert stored_rows(game_id) == 1
 
 
 @pytest.mark.asyncio
-async def test_a_rejoin_during_the_first_save_leaves_it_to_that_save(emits, monkeypatch):
+async def test_a_rejoin_during_the_first_save_leaves_it_to_that_save(
+    emits, monkeypatch
+):
     db = FlakyDb(monkeypatch, failures=0)
     started, release = asyncio.Event(), asyncio.Event()
     real = gs.persist_if_finished
@@ -276,7 +292,9 @@ async def test_a_rejoin_during_the_first_save_leaves_it_to_that_save(emits, monk
     await connect("s1", {"guestId": guest})
     await game.create_game("s1", {"config": config(1)})
     game_id = emits.of("game_created")[-1]["game_id"]
-    finishing = asyncio.create_task(game.submit_day("s1", {"game_id": game_id, "day": 1, **PLAN}))
+    finishing = asyncio.create_task(
+        game.submit_day("s1", {"game_id": game_id, "day": 1, **PLAN})
+    )
     await started.wait()  # the first write is under way
     assert game.persist_retry_in_flight(game_id)
 
@@ -290,7 +308,9 @@ async def test_a_rejoin_during_the_first_save_leaves_it_to_that_save(emits, monk
     assert stored_rows(game_id) == 1 and not game.persist_retry_in_flight(game_id)
 
 
-def hold_the_last_answer(monkeypatch, background: asyncio.Task[None]) -> tuple[Any, Any]:
+def hold_the_last_answer(
+    monkeypatch, background: asyncio.Task[None]
+) -> tuple[Any, Any]:
     """The background retry pauses just before its final answer: (answering, hold)."""
     answering, hold = asyncio.Event(), asyncio.Event()
     real_say = game._say_persisted
@@ -306,7 +326,9 @@ def hold_the_last_answer(monkeypatch, background: asyncio.Task[None]) -> tuple[A
 
 
 @pytest.mark.asyncio
-async def test_a_rejoin_while_the_last_retry_answers_saves_again(emits, monkeypatch, retry_gate):
+async def test_a_rejoin_while_the_last_retry_answers_saves_again(
+    emits, monkeypatch, retry_gate
+):
     db = FlakyDb(monkeypatch, failures=4)
     guest, game_id = await finish_a_game(emits)
     background = game._persist_retries[game_id]
@@ -336,7 +358,8 @@ async def test_a_hand_retry_failing_while_the_last_retry_answers_is_retried_too(
     await answering.wait()
     retry_gate.clear()  # the next background retry waits until the end
 
-    await game.retry_persist("s1", {"game_id": game_id})  # fails: background retries again
+    # Fails: background retries again
+    await game.retry_persist("s1", {"game_id": game_id})
     assert db.attempts == ["fail"] * 5 and game.persist_retry_in_flight(game_id)
     again = game._persist_retries[game_id]
     assert again is not background

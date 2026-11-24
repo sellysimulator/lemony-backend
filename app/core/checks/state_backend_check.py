@@ -15,8 +15,8 @@ def check_state_backend() -> None:
     if settings.REDIS_ENABLED:
         if not settings.REDIS_URL:
             logger.critical(
-                "REDIS_ENABLED is true but REDIS_URL is empty. Live games cannot be stored. "
-                "Set REDIS_URL, or set REDIS_ENABLED=false."
+                "REDIS_ENABLED is true but REDIS_URL is empty. Live games cannot be "
+                "stored. Set REDIS_URL, or set REDIS_ENABLED=false."
             )
             return
         logger.info("Live games: Redis. Multiple instances may serve the app.")
@@ -35,5 +35,7 @@ def check_state_backend() -> None:
             purged = backend.purge_expired_sync()
             if purged:
                 logger.info("Purged %d expired live game rows.", purged)
-        except Exception as exc:  # noqa: BLE001 — a down database must not block startup
-            logger.warning("Could not purge expired live games (%s).", type(exc).__name__)
+        except Exception as exc:  # a down database must not block startup
+            logger.warning(
+                "Could not purge expired live games (%s).", type(exc).__name__
+            )

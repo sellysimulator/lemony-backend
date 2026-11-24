@@ -83,7 +83,9 @@ class Settings(BaseSettings):
     # `ENV_FILE` names the dotenv file (default `.env`); empty reads none. The test
     # suite sets it empty, so it never reads a developer's file.
     model_config = SettingsConfigDict(
-        env_file=os.environ.get("ENV_FILE", ".env") or None, case_sensitive=True, extra="ignore"
+        env_file=os.environ.get("ENV_FILE", ".env") or None,
+        case_sensitive=True,
+        extra="ignore",
     )
 
     @field_validator("CORS_ORIGINS")
@@ -125,10 +127,10 @@ class Settings(BaseSettings):
 
         ``options=-c timezone=UTC`` makes every session hand timestamps back in
         UTC. ``connect_timeout`` (libpq, seconds) makes a new connection to an
-        unreachable server fail after 10 s instead of hanging. With ``DB_SSL_CA`` the server certificate and host name are verified
-        (``sslmode=verify-full``); without it the link is encrypted but the server
-        is not authenticated (``sslmode=require``). Any other URL (the suite's
-        SQLite) gets no args.
+        unreachable server fail after 10 s instead of hanging. With ``DB_SSL_CA`` the
+        server certificate and host name are verified (``sslmode=verify-full``); without
+        it the link is encrypted but the server is not authenticated
+        (``sslmode=require``). Any other URL (the suite's SQLite) gets no args.
         """
         if not self.is_postgres:
             return {}

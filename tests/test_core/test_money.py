@@ -1,4 +1,5 @@
-"""The rounding rules: money and the pack prices it gives, and every other game quantity.
+"""The rounding rules: money and the pack prices it gives, and every other game
+quantity.
 
 Only the server rounds money: every figure it sends is already rounded, and the client
 just prints it. Halves go away from zero after float noise is trimmed to 12 digits.
@@ -71,7 +72,16 @@ def test_pack_price(size, unit_cost, discount, expected):
 
 @pytest.mark.parametrize(
     "value, expected",
-    [(0.5, 1), (1.5, 2), (2.5, 3), (30.5, 31), (2.4999, 2), (-2.5, -2), (-2.6, -3), (0.0, 0)],
+    [
+        (0.5, 1),
+        (1.5, 2),
+        (2.5, 3),
+        (30.5, 31),
+        (2.4999, 2),
+        (-2.5, -2),
+        (-2.6, -3),
+        (0.0, 0),
+    ],
 )
 def test_half_up(value, expected):
     assert half_up(value) == expected

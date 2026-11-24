@@ -28,7 +28,9 @@ def _keys(sessions: Callable[[], Session]) -> set[str]:
         return set(db.execute(select(LiveGame.state_key)).scalars())
 
 
-def _expire_at(sessions: Callable[[], Session], key: str, when: datetime | None) -> None:
+def _expire_at(
+    sessions: Callable[[], Session], key: str, when: datetime | None
+) -> None:
     with sessions() as db:
         row = db.get(LiveGame, key)
         assert row is not None
@@ -36,7 +38,9 @@ def _expire_at(sessions: Callable[[], Session], key: str, when: datetime | None)
         db.commit()
 
 
-def test_set_get_expire_delete(db_sessions: Callable[[], Session], frozen: datetime) -> None:
+def test_set_get_expire_delete(
+    db_sessions: Callable[[], Session], frozen: datetime
+) -> None:
     backend = SqlStateBackend(db_sessions)
     backend._setex_sync("game:a", 60, "v1")
     backend._setex_sync("game:a", 60, "v2")  # an overwrite, not a second row
@@ -54,7 +58,9 @@ def test_set_get_expire_delete(db_sessions: Callable[[], Session], frozen: datet
     assert backend._get_sync("game:b") is None
 
 
-def test_expiry_boundary_second(db_sessions: Callable[[], Session], frozen: datetime) -> None:
+def test_expiry_boundary_second(
+    db_sessions: Callable[[], Session], frozen: datetime
+) -> None:
     """A row is gone at its expiry instant (`<=`), and alive one second before it."""
     backend = SqlStateBackend(db_sessions)
     backend._setex_sync("game:edge", 60, "v")

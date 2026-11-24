@@ -68,7 +68,8 @@ def _share(value: float) -> float:
 
 
 def _steps(low: float, high: float, step: float) -> list[float]:
-    """``low``, ``low + step``, ... up to ``high``, at most GRID_CAP points, to the cent."""
+    """``low``, ``low + step``, ... up to ``high``, at most GRID_CAP points, to the
+    cent."""
     out: list[float] = []
     k = 0
     while low + k * step <= high + _NOISE and len(out) < GRID_CAP:
@@ -90,16 +91,21 @@ def _temperature_grid(temperature: FloatRange) -> list[float]:
 
 
 def typical_temperature(config: GameConfig, weather: str) -> float:
-    """A typical day of this weather: the middle of its range, inside the day's range."""
+    """A typical day of this weather: the middle of its range, inside the day's
+    range."""
     t = config.min_max_values.temperature
     r = config.weather_temperature_ranges[weather]
     return min(t.max, max(t.min, (r.min + r.max) / 2))
 
 
-def _chance(config: GameConfig, person: PersonType, price: float, recipe: dict[str, int]) -> float:
+def _chance(
+    config: GameConfig, person: PersonType, price: float, recipe: dict[str, int]
+) -> float:
     """The buy chance at a neutral popularity, exactly as run_day forms it."""
     quality = recipe_quality(ingredient_scores(person, recipe))
-    return buy_probability(person, price, willingness_to_pay(person, quality, config.quality_swing))
+    return buy_probability(
+        person, price, willingness_to_pay(person, quality, config.quality_swing)
+    )
 
 
 # ------------------------------------------------------------------ ingredients
@@ -117,11 +123,16 @@ def ingredient_preview(name: str, cfg: IngredientConfig) -> dict[str, Any]:
     smallest, biggest = offers[0], offers[-1]
     if biggest["size"] > smallest["size"]:
         small_unit = smallest["price"] / smallest["size"]
-        break_even = math.ceil(biggest["price"] / small_unit - _NOISE) if small_unit > 0 else 0
+        break_even = (
+            math.ceil(biggest["price"] / small_unit - _NOISE) if small_unit > 0 else 0
+        )
     else:
         break_even = None
     stock = Ingredient.from_config(name, cfg)
-    nights = [min(cfg.fresh_days + 1, cfg.max_days), min(cfg.fresh_days + 2, cfg.max_days)]
+    nights = [
+        min(cfg.fresh_days + 1, cfg.max_days),
+        min(cfg.fresh_days + 2, cfg.max_days),
+    ]
     return {
         "packs": offers,
         "smallest": smallest,
@@ -132,7 +143,8 @@ def ingredient_preview(name: str, cfg: IngredientConfig) -> dict[str, Any]:
         "example_batch": {
             "size": EXAMPLE_BATCH,
             "after": [
-                {"night": n, "left": half_up(EXAMPLE_BATCH * stock.survival(n))} for n in nights
+                {"night": n, "left": half_up(EXAMPLE_BATCH * stock.survival(n))}
+                for n in nights
             ],
         },
     }
@@ -156,7 +168,9 @@ def _person_figures(
     for raw in (floor, person.average_expense, best, price_range.max):
         price = round_cents(min(price_range.max, max(price_range.min, raw)))
         if price not in [p["price"] for p in probes]:
-            probes.append({"price": price, "chance": _share(buy_probability(person, price, best))})
+            probes.append(
+                {"price": price, "chance": _share(buy_probability(person, price, best))}
+            )
     scores = ingredient_scores(person, typical["recipe"])
     quality = recipe_quality(scores)
     wtp = willingness_to_pay(person, quality, swing)
@@ -165,18 +179,26 @@ def _person_figures(
     multipliers = config.weather_multipliers
 
     def spawn(hour: int, weather: str) -> float:
-        return expected_spawn(person, hour, weather, temperatures[weather], multipliers[weather])
+        return expected_spawn(
+            person, hour, weather, temperatures[weather], multipliers[weather]
+        )
 
     return {
         "hour_score": [_share(hour_score(person, h)) for h in grids["hours"]],
-        "temperature_score": [_share(temperature_score(person, t)) for t in grids["temperatures"]],
+        "temperature_score": [
+            _share(temperature_score(person, t)) for t in grids["temperatures"]
+        ],
         "ingredient_score": {
-            name: [_share(ingredient_score(person, name, a)) for a in grids["per_cup"][name]]
+            name: [
+                _share(ingredient_score(person, name, a))
+                for a in grids["per_cup"][name]
+            ]
             for name in RECIPE_INGREDIENTS
         },
         # Chance to buy the typical plan's recipe at each price of the grid.
         "typical_chance": [
-            _share(_chance(config, person, p, typical["recipe"])) for p in grids["prices"]
+            _share(_chance(config, person, p, typical["recipe"]))
+            for p in grids["prices"]
         ],
         # Each type's chance to buy THIS type's favourite cup at each price of the grid.
         "favourite_chance": {
@@ -186,29 +208,40 @@ def _person_figures(
             ]
             for kind, other in zip(PERSON_TYPES, game.people, strict=True)
         },
-        # Expected visitors of this type per hour, each weather at its typical temperature.
-        "spawn": {w: [_share(spawn(h, w)) for h in grids["hours"]] for w in WEATHER_TYPES},
-        "preferred_hour_spawn": {w: _share(spawn(prefs.preferred_hour, w)) for w in WEATHER_TYPES},
+        # Expected visitors of this type per hour, each weather at its typical
+        # temperature.
+        "spawn": {
+            w: [_share(spawn(h, w)) for h in grids["hours"]] for w in WEATHER_TYPES
+        },
+        "preferred_hour_spawn": {
+            w: _share(spawn(prefs.preferred_hour, w)) for w in WEATHER_TYPES
+        },
         "wtp_best": round_cents(best),
         "wtp_worst": round_cents(willingness_to_pay(person, 0, swing)),
         "cheap_floor": round_cents(floor),
-        # One "price tolerance above" in money: half buy at wtp_best, ~95% this much under
-        # it (sure_price) and ~5% this much over it (long_shot_price).
+        # One "price tolerance above" in money: half buy at wtp_best, ~95% this much
+        # under it (sure_price) and ~5% this much over it (long_shot_price).
         "price_reach": round_cents(reach),
         "sure_price": round_cents(best - reach),
         "long_shot_price": round_cents(best + reach),
         "favourite_probes": probes,
-        "favourite_at_budget": _share(buy_probability(person, person.average_expense, best)),
+        "favourite_at_budget": _share(
+            buy_probability(person, person.average_expense, best)
+        ),
         # The worked example at the typical plan, at a neutral popularity.
         "worked": {
             "scores": {name: _share(scores[name]) for name in RECIPE_INGREDIENTS},
             "quality": _share(quality),
             "wtp": round_cents(wtp),
             "chance": _share(typical_chance),
-            "reason": refusal_reason(person, typical["price"], typical["recipe"], scores),
+            "reason": refusal_reason(
+                person, typical["price"], typical["recipe"], scores
+            ),
         },
         # The typical plan's chance, scaled by each popularity of the grid.
-        "popularity_chance": [_share(apply_popularity(typical_chance, x)) for x in POPULARITY_GRID],
+        "popularity_chance": [
+            _share(apply_popularity(typical_chance, x)) for x in POPULARITY_GRID
+        ],
     }
 
 
@@ -234,7 +267,8 @@ def _cup_cost_example(
         "spend": spend,
         "cups_possible": cups,
         "cost_per_cup": cost,
-        # How many times the starting cash buys these packs; None when they cost nothing.
+        # How many times the starting cash buys these packs; None when they cost
+        # nothing.
         "covers": round(config.starting_cash / spend, 4) if spend > 0 else None,
         # The mid-range price less the cost per cup.
         "margin_per_cup": None if cost is None else round_cents(sample["price"] - cost),
@@ -250,7 +284,9 @@ def config_help(config: GameConfig) -> dict[str, Any]:
         "temperatures": _temperature_grid(mm.temperature),
         "prices": _price_grid(mm.price),
         "per_cup": {
-            name: list(range(getattr(mm, name).min, getattr(mm, name).max + 1))[:GRID_CAP]
+            name: list(range(getattr(mm, name).min, getattr(mm, name).max + 1))[
+                :GRID_CAP
+            ]
             for name in RECIPE_INGREDIENTS
         },
         "popularity": POPULARITY_GRID,
@@ -276,7 +312,8 @@ def config_help(config: GameConfig) -> dict[str, Any]:
             ),
         }
     people = {
-        person.kind: _person_figures(config, game, person, grids, typical) for person in game.people
+        person.kind: _person_figures(config, game, person, grids, typical)
+        for person in game.people
     }
     start = config.starting_popularity
     probes = sorted({*POPULARITY_PROBES, start})
@@ -285,7 +322,8 @@ def config_help(config: GameConfig) -> dict[str, Any]:
         "plans": {"sample": sample, "typical": typical},
         "weather": weather,
         "people": people,
-        # What a cup is worth as a share of the budget: loved, average, disliked in every way.
+        # What a cup is worth as a share of the budget: loved, average, disliked in
+        # every way.
         "quality_swing": {
             "best": _share(wtp_share(1, config.quality_swing)),
             "average": _share(wtp_share(0.5, config.quality_swing)),
@@ -297,9 +335,12 @@ def config_help(config: GameConfig) -> dict[str, Any]:
                 {
                     "popularity": x,
                     "factor": _share(popularity_factor(x)),
-                    # Each type buying its favourite cup at its budget, at this popularity.
+                    # Each type buying its favourite cup at its budget, at this
+                    # popularity.
                     "favourite_at_budget": {
-                        kind: _share(apply_popularity(people[kind]["favourite_at_budget"], x))
+                        kind: _share(
+                            apply_popularity(people[kind]["favourite_at_budget"], x)
+                        )
                         for kind in PERSON_TYPES
                     },
                 }
@@ -315,7 +356,11 @@ def config_help(config: GameConfig) -> dict[str, Any]:
         # Each pack's price as a share of the starting cash (0 with no starting cash).
         "pack_cash_share": {
             name: [
-                _share(offer["price"] / config.starting_cash if config.starting_cash else 0.0)
+                _share(
+                    offer["price"] / config.starting_cash
+                    if config.starting_cash
+                    else 0.0
+                )
                 for offer in pack_offers(config.ingredients[name])
             ]
             for name in INGREDIENT_NAMES

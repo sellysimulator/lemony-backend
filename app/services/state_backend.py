@@ -91,7 +91,9 @@ class SqlStateBackend:
         # Weak values: a key's lock lives only while a `_ProcessLock` holds or awaits
         # it, so keys nobody uses any more (finished games, ids a client made up)
         # never pile up in memory.
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
 
     def _session(self) -> Session:
         if self._session_factory is None:
@@ -132,7 +134,9 @@ class SqlStateBackend:
     def purge_expired_sync(self) -> int:
         """Drop every expired row. Returns how many went."""
         with self._session() as db:
-            result = db.execute(delete(LiveGame).where(LiveGame.expires_at <= _utcnow()))
+            result = db.execute(
+                delete(LiveGame).where(LiveGame.expires_at <= _utcnow())
+            )
             db.commit()
             return int(result.rowcount or 0)  # type: ignore[attr-defined]
 

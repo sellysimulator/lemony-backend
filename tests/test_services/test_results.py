@@ -60,8 +60,14 @@ async def finished(emits, sid: str, auth: dict[str, str]) -> str:
 
 
 @pytest.mark.asyncio
-async def test_results_open_without_auth_and_match_the_owner_view(emits, firebase_tokens):
-    firebase_tokens["tok"] = {"uid": "uid-results-7", "name": "Lemon Lover", "email": "ll@x.io"}
+async def test_results_open_without_auth_and_match_the_owner_view(
+    emits, firebase_tokens
+):
+    firebase_tokens["tok"] = {
+        "uid": "uid-results-7",
+        "name": "Lemon Lover",
+        "email": "ll@x.io",
+    }
     public_id = await finished(emits, "s1", {"idToken": "tok"})
     client = TestClient(app)
     res = client.get(f"/api/v1/games/id/{public_id}/results")
@@ -79,7 +85,8 @@ async def test_results_open_without_auth_and_match_the_owner_view(emits, firebas
     # A token sent along changes nothing.
     assert (
         client.get(
-            f"/api/v1/games/id/{public_id}/results", headers={"Authorization": "Bearer tok"}
+            f"/api/v1/games/id/{public_id}/results",
+            headers={"Authorization": "Bearer tok"},
         ).json()
         == body
     )
@@ -87,12 +94,18 @@ async def test_results_open_without_auth_and_match_the_owner_view(emits, firebas
 
 @pytest.mark.asyncio
 async def test_results_name_no_player(emits, firebase_tokens):
-    firebase_tokens["tok"] = {"uid": "uid-results-8", "name": "Lemon Lover", "email": "ll@x.io"}
+    firebase_tokens["tok"] = {
+        "uid": "uid-results-8",
+        "name": "Lemon Lover",
+        "email": "ll@x.io",
+    }
     signed_in = await finished(emits, "s1", {"idToken": "tok"})
     guest = new_guest()
     as_guest = await finished(emits, "g1", {"guestId": guest})
     client = TestClient(app)
-    client.post("/api/v1/users/upsert", json={}, headers={"Authorization": "Bearer tok"})
+    client.post(
+        "/api/v1/users/upsert", json={}, headers={"Authorization": "Bearer tok"}
+    )
     with SessionLocal() as db:
         rows = {g.public_id: g for g in db.query(Game).all()}
         secrets = {
@@ -107,7 +120,13 @@ async def test_results_name_no_player(emits, firebase_tokens):
         assert body["days"] and body["public_id"] == public_id
         assert not keys_of(body) & FORBIDDEN_KEYS
         text = json.dumps(body)
-        for value in ("uid-results-8", "Lemon Lover", "ll@x.io", guest, "session_token"):
+        for value in (
+            "uid-results-8",
+            "Lemon Lover",
+            "ll@x.io",
+            guest,
+            "session_token",
+        ):
             assert value not in text
         seed, _user_id, guest_identity = secrets[public_id]
         assert seed not in text

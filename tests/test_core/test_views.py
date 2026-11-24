@@ -28,7 +28,12 @@ from app.core.money import round_cents
 from app.core.plans import opening_plan
 
 PLAN = {
-    "purchases": {"ice": {"100": 1}, "sugar": {"100": 1}, "lemons": {"300": 1}, "cups": {"100": 1}},
+    "purchases": {
+        "ice": {"100": 1},
+        "sugar": {"100": 1},
+        "lemons": {"300": 1},
+        "cups": {"100": 1},
+    },
     "price": 0.6,
     "recipe": {"ice": 1, "sugar": 1, "lemons": 2},
 }
@@ -56,7 +61,9 @@ def test_every_event_carries_the_running_sales_and_the_engines_stock():
     assert events, "the default day has visitors"
 
     opening = record["inventory_open"]
-    assert opening == {n: stock_before[n] + record["purchased"][n] for n in INGREDIENT_NAMES}
+    assert opening == {
+        n: stock_before[n] + record["purchased"][n] for n in INGREDIENT_NAMES
+    }
     usage = cup_usage(record["recipe"])
     sold = 0
     for e in events:
@@ -73,9 +80,15 @@ def test_every_event_carries_the_running_sales_and_the_engines_stock():
 
 
 def test_a_sell_out_ends_with_no_cups_left(monkeypatch):
-    monkeypatch.setattr(LemonadeGame, "weather_for_day", lambda self, day: ("sunny", 30.0))
+    monkeypatch.setattr(
+        LemonadeGame, "weather_for_day", lambda self, day: ("sunny", 30.0)
+    )
     small = {name: {"100": 1} for name in INGREDIENT_NAMES}
-    plan = {"purchases": small, "price": 0.3, "recipe": {"ice": 1, "sugar": 1, "lemons": 5}}
+    plan = {
+        "purchases": small,
+        "price": 0.3,
+        "recipe": {"ice": 1, "sugar": 1, "lemons": 5},
+    }
     result = make_game().run_day(DayPlan.model_validate(plan))
     assert result["record"]["cups_open"] == 20  # 100 lemons, 5 a cup
     assert result["record"]["sold_out"] > 0
@@ -126,10 +139,14 @@ def test_type_and_hour_figures_are_the_engines_counts():
     view = play(game)["record"]
     for kind in PERSON_TYPES:
         t = view["by_type"][kind]
-        assert t["conversion"] == (round(t["buyers"] / t["visitors"], 4) if t["visitors"] else None)
+        assert t["conversion"] == (
+            round(t["buyers"] / t["visitors"], 4) if t["visitors"] else None
+        )
     for h in view["by_hour"]:
         assert h["refused"] == h["visitors"] - h["buyers"] - h["sold_out"]
-        assert h["conversion"] == (round(h["buyers"] / h["visitors"], 4) if h["visitors"] else None)
+        assert h["conversion"] == (
+            round(h["buyers"] / h["visitors"], 4) if h["visitors"] else None
+        )
     assert sum(h["refused"] for h in view["by_hour"]) == view["refused"]
 
 
@@ -162,16 +179,24 @@ def test_the_summary_adds_up_the_days():
         play(game)
     s = game.summary()
     assert s["conversion"] == round(s["total_buyers"] / s["total_visitors"], 4)
-    assert s["total_perished_value"] == round_cents(sum(d["perished_value"] for d in game.days))
+    assert s["total_perished_value"] == round_cents(
+        sum(d["perished_value"] for d in game.days)
+    )
     assert s["neutral_popularity"] == NEUTRAL_POPULARITY
     hours = range(9, 18)
     assert [h["hour"] for h in s["hour_totals"]] == list(hours)
     for row in s["hour_totals"]:
         visitors = sum(
-            h["visitors"] for d in game.days for h in d["by_hour"] if h["hour"] == row["hour"]
+            h["visitors"]
+            for d in game.days
+            for h in d["by_hour"]
+            if h["hour"] == row["hour"]
         )
         buyers = sum(
-            h["buyers"] for d in game.days for h in d["by_hour"] if h["hour"] == row["hour"]
+            h["buyers"]
+            for d in game.days
+            for h in d["by_hour"]
+            if h["hour"] == row["hour"]
         )
         assert (row["visitors"], row["buyers"], row["not_bought"]) == (
             visitors,
@@ -182,8 +207,14 @@ def test_the_summary_adds_up_the_days():
 
 
 def test_a_summary_with_no_visitors_has_no_success_rate():
-    s = summarize(num_days=1, starting_cash=10, final_cash=10, final_popularity=None, days=[])
-    assert s["conversion"] is None and s["hour_totals"] == [] and s["total_perished_value"] == 0
+    s = summarize(
+        num_days=1, starting_cash=10, final_cash=10, final_popularity=None, days=[]
+    )
+    assert (
+        s["conversion"] is None
+        and s["hour_totals"] == []
+        and s["total_perished_value"] == 0
+    )
 
 
 # ------------------------------------------------------------ the state

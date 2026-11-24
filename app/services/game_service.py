@@ -115,7 +115,9 @@ def summary_of(document: dict[str, Any]) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------- create
-async def create_game(identity: str, config_data: Any, replace: bool = False) -> dict[str, Any]:
+async def create_game(
+    identity: str, config_data: Any, replace: bool = False
+) -> dict[str, Any]:
     """Start a new game and make it the identity's active one.
 
     A finished game that is not saved yet is never left behind: its live copy
@@ -133,7 +135,9 @@ async def create_game(identity: str, config_data: Any, replace: bool = False) ->
             # Lock order is always identity → game; nothing takes them the other way.
             async with state_svc.lock(active_id):
                 active = await state_svc.get_game(active_id)
-                unfinished = active is not None and active["engine"]["phase"] != "finished"
+                unfinished = (
+                    active is not None and active["engine"]["phase"] != "finished"
+                )
                 if unfinished and not replace:
                     raise GameError(
                         "ACTIVE_GAME_EXISTS",
@@ -141,8 +145,13 @@ async def create_game(identity: str, config_data: Any, replace: bool = False) ->
                     )
                 if unfinished:
                     await state_svc.delete_game(active_id)
-            # Outside the game lock: `persist_if_finished` takes it (it is not reentrant).
-            if not unfinished and active is not None and await persist_if_finished(active) is None:
+            # Outside the game lock: `persist_if_finished` takes it (it is not
+            # reentrant).
+            if (
+                not unfinished
+                and active is not None
+                and await persist_if_finished(active) is None
+            ):
                 raise GameError(
                     "UNSAVED_GAME",
                     "Your last game is not saved yet, so a new one can't start. "
@@ -184,7 +193,9 @@ async def load_owned(
     document = await state_svc.get_game(game_id)
     if document is None or not _same(document.get("identity"), identity):
         return None
-    if session_token is not None and not _same(document.get("session_token"), session_token):
+    if session_token is not None and not _same(
+        document.get("session_token"), session_token
+    ):
         return None
     return document
 
@@ -214,7 +225,11 @@ async def submit_day(
         if not isinstance(day, int):
             raise GameError("INVALID_PLAN", "day must be a number")
         if engine.phase != "planning" or day != engine.day:
-            if engine.days and engine.days[-1]["day"] == day and engine.phase != "planning":
+            if (
+                engine.days
+                and engine.days[-1]["day"] == day
+                and engine.phase != "planning"
+            ):
                 stored = {"record": engine.day_records()[-1], "events": None}
                 return document, stored, True
             raise GameError("WRONG_DAY", f"It is day {engine.day}, not day {day}.")
@@ -273,7 +288,8 @@ async def bump_seq(document: dict[str, Any]) -> int | None:
 
 # ------------------------------------------------------------------- persist
 async def persist_if_finished(document: dict[str, Any]) -> str | None:
-    """Write a finished, not-yet-persisted game to the database. Safe to call repeatedly.
+    """Write a finished, not-yet-persisted game to the database. Safe to call
+    repeatedly.
 
     Returns the public id once the game is saved, else None (not finished, or the
     write failed and the document keeps `persisted: false`).
@@ -281,7 +297,9 @@ async def persist_if_finished(document: dict[str, Any]) -> str | None:
     if document["engine"]["phase"] != "finished" or document.get("persisted"):
         return document.get("public_id")
     summary = engine_of(document).summary()
-    public_id = await anyio.to_thread.run_sync(db_service.persist_finished_game, document, summary)
+    public_id = await anyio.to_thread.run_sync(
+        db_service.persist_finished_game, document, summary
+    )
     if public_id is None:
         return None
     async with state_svc.lock(document["game_id"]):

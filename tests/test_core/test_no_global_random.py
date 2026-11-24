@@ -14,7 +14,8 @@ ALLOWED = {"Random", "SystemRandom"}
 
 
 def global_random_uses(source: str) -> list[str]:
-    """Each `random.<fn>(…)` call and `from random import <fn>` that is not a generator class."""
+    """Each `random.<fn>(…)` call and `from random import <fn>` that is not a generator
+    class."""
     found: list[str] = []
     for node in ast.walk(ast.parse(source)):
         if (
@@ -27,7 +28,9 @@ def global_random_uses(source: str) -> list[str]:
             found.append(f"random.{node.func.attr}()")
         elif isinstance(node, ast.ImportFrom) and node.module == "random":
             found.extend(
-                f"from random import {a.name}" for a in node.names if a.name not in ALLOWED
+                f"from random import {a.name}"
+                for a in node.names
+                if a.name not in ALLOWED
             )
     return found
 

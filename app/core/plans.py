@@ -5,7 +5,8 @@ client never rounds to the price step or averages the customers itself.
 
 * ``sample_plan``: the middle of every range (the help's "mid-range cup").
 * ``typical_plan``: the customers' average favourite recipe at their average budget.
-* ``opening_plan``: day 1 on the plan screen: the mid-range recipe at the average budget.
+* ``opening_plan``: day 1 on the plan screen: the mid-range recipe at the average
+  budget.
 
 Halves round up, and prices land on the price step inside the price range.
 """
@@ -47,7 +48,9 @@ def favourite_recipe(config: GameConfig, person: str) -> dict[str, int]:
 
 
 def _average_budget(config: GameConfig) -> float:
-    return fmean(config.people_preferences[kind].average_expense for kind in PERSON_TYPES)
+    return fmean(
+        config.people_preferences[kind].average_expense for kind in PERSON_TYPES
+    )
 
 
 def sample_plan(config: GameConfig) -> dict[str, Any]:

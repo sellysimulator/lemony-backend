@@ -72,23 +72,36 @@ def test_client_ip_takes_the_rightmost_forwarded_entry() -> None:
         "client": ("6.6.6.6", 1),
     }
     assert client_ip(scope) == "1.2.3.4"
-    two_headers = {"headers": [(b"X-Forwarded-For", b"6.6.6.6"), (b"x-forwarded-for", b"5.5.5.5")]}
+    two_headers = {
+        "headers": [(b"X-Forwarded-For", b"6.6.6.6"), (b"x-forwarded-for", b"5.5.5.5")]
+    }
     assert client_ip(two_headers) == "5.5.5.5"
 
 
 def test_client_ip_prefers_cf_connecting_ip() -> None:
     scope = {
-        "headers": [(b"x-forwarded-for", b"6.6.6.6, 1.2.3.4"), (b"CF-Connecting-IP", b" 7.7.7.7 ")],
+        "headers": [
+            (b"x-forwarded-for", b"6.6.6.6, 1.2.3.4"),
+            (b"CF-Connecting-IP", b" 7.7.7.7 "),
+        ],
         "client": ("6.6.6.6", 1),
     }
     assert client_ip(scope) == "7.7.7.7"
-    empty = {"headers": [(b"cf-connecting-ip", b" "), (b"x-forwarded-for", b"6.6.6.6, 1.2.3.4")]}
+    empty = {
+        "headers": [
+            (b"cf-connecting-ip", b" "),
+            (b"x-forwarded-for", b"6.6.6.6, 1.2.3.4"),
+        ]
+    }
     assert client_ip(empty) == "1.2.3.4"
 
 
 def test_client_ip_falls_back_to_the_peer() -> None:
     assert client_ip({"headers": [], "client": ("9.9.9.9", 1)}) == "9.9.9.9"
-    assert client_ip({"headers": [(b"x-forwarded-for", b" ")], "client": None}) == UNKNOWN_IP
+    assert (
+        client_ip({"headers": [(b"x-forwarded-for", b" ")], "client": None})
+        == UNKNOWN_IP
+    )
     assert client_ip({}) == UNKNOWN_IP
 
 
@@ -112,7 +125,8 @@ def test_client_ip_logs_each_source_once_and_never_the_address(
 
 
 def test_client_ip_source_label_is_bounded(caplog: pytest.LogCaptureFixture) -> None:
-    """A client picks how many X-Forwarded-For entries it sends; the log must not grow with it."""
+    """A client picks how many X-Forwarded-For entries it sends; the log must not grow
+    with it."""
     caplog.set_level(logging.INFO, logger=abuse.__name__)
     for n in (4, 5, 9):
         chain = ", ".join(f"10.0.0.{i}" for i in range(n)).encode()
@@ -184,7 +198,8 @@ async def test_middleware_replays_the_body_then_hands_over_receive() -> None:
 
 def test_per_address_caps_fit_a_whole_school_behind_one_address() -> None:
     """A school shares one NAT address: the per-address caps are sized for it, and the
-    per-sid limits (`EVENT_LIMIT`, `PREVIEW_LIMIT`) stay the guard against one client."""
+    per-sid limits (`EVENT_LIMIT`, `PREVIEW_LIMIT`) stay the guard against one client.
+    """
     assert abuse.MAX_SOCKETS_PER_IP >= 400
     assert abuse.CONNECT_LIMIT >= 300 and abuse.CONNECT_WINDOW == 60.0
     assert abuse.REST_LIMIT >= 3000 and abuse.REST_WINDOW == 60.0

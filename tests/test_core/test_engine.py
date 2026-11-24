@@ -123,7 +123,18 @@ def test_num_days_bounds():
 # ------------------------------------------------------------ perishing
 def test_hazard_fresh_ramp():
     sugar = Ingredient("sugar", 0.1, fresh_days=5, max_days=10, never_perishes=False)
-    assert [sugar.hazard(d) for d in range(1, 11)] == [0, 0, 0, 0, 0, 0.2, 0.4, 0.6, 0.8, 1]
+    assert [sugar.hazard(d) for d in range(1, 11)] == [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1,
+    ]
 
 
 def test_ice_gone_first_night_and_cups_never():
@@ -234,7 +245,8 @@ def people_by_kind():
 
 def test_ingredient_kernel_uses_separate_reach_below_and_above():
     assert asymmetric_kernel(1, 2, 1, 3) == 0  # 1 under with a reach of 1
-    assert asymmetric_kernel(3, 2, 1, 3) == pytest.approx(2 / 3)  # 1 over with a reach of 3
+    # 1 over with a reach of 3
+    assert asymmetric_kernel(3, 2, 1, 3) == pytest.approx(2 / 3)
     assert asymmetric_kernel(2, 2, 0, 0) == 1
 
 
@@ -293,9 +305,9 @@ def test_refusal_blames_price_or_the_worst_ingredient():
     adult = people_by_kind()["Adult"]
     favourite = {"ice": 1, "sugar": 1, "lemons": 3}
     sour_less = {"ice": 1, "sugar": 1, "lemons": 2}  # lemons score 0 (reach below is 1)
-    assert refusal_reason(adult, 0.80, favourite, ingredient_scores(adult, favourite)) == (
-        "too_pricey"
-    )
+    assert refusal_reason(
+        adult, 0.80, favourite, ingredient_scores(adult, favourite)
+    ) == ("too_pricey")
     scores = ingredient_scores(adult, sour_less)
     assert refusal_reason(adult, 0.80, sour_less, scores) == "needs_more_lemon"
     assert refusal_reason(adult, 2.00, sour_less, scores) == "too_pricey"
@@ -305,7 +317,9 @@ def test_every_type_has_a_profitable_price_for_its_favourite_cup():
     game = LemonadeGame(cfg(), seed=1)
     swing = game.config.quality_swing
     for person in game.people:
-        recipe = {n: getattr(person, f"preferred_{n}") for n in ("ice", "sugar", "lemons")}
+        recipe = {
+            n: getattr(person, f"preferred_{n}") for n in ("ice", "sugar", "lemons")
+        }
         cost = list_cost(game, recipe)
         wtp = willingness_to_pay(person, 1, swing)
         assert cost < person.average_expense
@@ -356,17 +370,22 @@ def test_the_saved_game_keeps_no_per_customer_list_so_its_size_ignores_the_crowd
         customers.append(result["record"]["visitors"])
         sizes.append(len(json.dumps(payload)))
     assert customers[1] > 10 * customers[0] and customers[1] > 1000
-    # Only the record's counts gain digits: a few hundred bytes, not one entry per customer.
+    # Only the record's counts gain digits: a few hundred bytes, not one entry per
+    # customer.
     assert sizes[1] - sizes[0] < 400 and sizes[1] < 16_000
 
 
 def test_a_payload_saved_with_the_customer_list_loads_and_drops_it():
     game = LemonadeGame(cfg(), seed=6)
     result = game.run_day(plan())
-    old = {**game.to_payload(), "last_day_events": result["events"]}  # saved before the change
+    # Saved before the change
+    old = {**game.to_payload(), "last_day_events": result["events"]}
     loaded = LemonadeGame.from_payload(old)
     assert loaded.days == game.days and loaded.phase == "played"
-    assert "last_day_events" not in loaded.to_payload() and "last_day_events" not in loaded.view()
+    assert (
+        "last_day_events" not in loaded.to_payload()
+        and "last_day_events" not in loaded.view()
+    )
     assert loaded.acknowledge_day(1) and loaded.run_day(plan())["events"]
 
 
@@ -394,14 +413,17 @@ def test_stock_out_produces_sold_out():
     rec = result["record"]
     assert rec["buyers"] <= 20  # 100 lemons / 5 per cup
     assert rec["sold_out"] > 0
-    assert all(e["outcome"] in {"bought", "sold_out", "refused"} for e in result["events"])
+    assert all(
+        e["outcome"] in {"bought", "sold_out", "refused"} for e in result["events"]
+    )
 
 
 def test_money_and_inventory_accounting():
     game = LemonadeGame(cfg(), seed=9)
     result = game.run_day(plan())
     rec = result["record"]
-    assert rec["spend"] == pytest.approx(12.0)  # four undiscounted 100-packs: 1 + 2 + 5 + 4
+    # Four undiscounted 100-packs: 1 + 2 + 5 + 4
+    assert rec["spend"] == pytest.approx(12.0)
     assert rec["cash_end"] == pytest.approx(100 - rec["spend"] + rec["revenue"])
     assert rec["revenue"] == pytest.approx(rec["buyers"] * 0.5)
     assert rec["perished"]["ice"] == 100 - rec["buyers"]  # all remaining ice melts
@@ -419,14 +441,23 @@ def test_money_lines_are_cents_and_cash_chains_exactly():
     cash = game.cash
     for day, price in enumerate((0.33, 0.47, 0.61, 0.29), start=1):
         rec = game.run_day(plan(price=price))["record"]
-        for key in ("spend", "revenue", "profit", "cash_end", "perished_value", "cost_per_cup"):
+        for key in (
+            "spend",
+            "revenue",
+            "profit",
+            "cash_end",
+            "perished_value",
+            "cost_per_cup",
+        ):
             assert rec[key] == round_cents(rec[key]), key
         assert rec["profit"] == round_cents(rec["revenue"] - rec["spend"])
         assert rec["cash_end"] == round_cents(cash + rec["profit"])
         cash = rec["cash_end"]
         game.acknowledge_day(day)
     summary = game.summary()
-    assert summary["total_profit"] == round_cents(sum(d["profit"] for d in summary["days"]))
+    assert summary["total_profit"] == round_cents(
+        sum(d["profit"] for d in summary["days"])
+    )
 
 
 def test_day_lifecycle_and_finish():
@@ -473,7 +504,8 @@ def test_popularity_carries_over_from_the_days_with_visitors():
 
 # ---------------------------------------------------------- cost per cup
 def test_cup_cost_uses_stock_in_order_and_averages_over_the_cups_it_makes():
-    # Two cups' worth: old lemons at 0.02 come first, then today's dearer lot, then the cheap one.
+    # Two cups' worth: old lemons at 0.02 come first, then today's dearer lot, then the
+    # cheap one.
     stock = {
         "ice": [(10, 0.01)],
         "sugar": [(10, 0.02)],
@@ -487,22 +519,39 @@ def test_cup_cost_uses_stock_in_order_and_averages_over_the_cups_it_makes():
 
 
 def test_cup_cost_is_none_without_a_single_cup_and_a_zero_amount_never_limits():
-    stock = {"ice": [], "sugar": [(5, 0.02)], "lemons": [(5, 0.05)], "cups": [(5, 0.04)]}
+    stock = {
+        "ice": [],
+        "sugar": [(5, 0.02)],
+        "lemons": [(5, 0.05)],
+        "cups": [(5, 0.04)],
+    }
     assert cup_cost(stock, {"ice": 1, "sugar": 1, "lemons": 1}) == (0, None)
-    assert cup_cost(stock, {"ice": 0, "sugar": 1, "lemons": 1}) == (5, round_cents(0.11))
-    assert cup_cost({"ice": [], "sugar": [], "lemons": [], "cups": []}, plan().recipe) == (0, None)
+    assert cup_cost(stock, {"ice": 0, "sugar": 1, "lemons": 1}) == (
+        5,
+        round_cents(0.11),
+    )
+    assert cup_cost(
+        {"ice": [], "sugar": [], "lemons": [], "cups": []}, plan().recipe
+    ) == (0, None)
 
 
 def test_the_game_prices_held_stock_first_then_todays_packs_dearest_first():
     game = LemonadeGame(cfg(), seed=3)
     game.inventory["lemons"].add(30, 0.02)  # older, cheap stock
-    game.inventory["lemons"].batches.append(Batch(30, age=4))  # saved before discounts: list price
+    # Saved before discounts: list price
+    game.inventory["lemons"].batches.append(Batch(30, age=4))
     _, _, lots = game.purchase_cost(
-        {"ice": {"100": 1}, "sugar": {"100": 1}, "lemons": {"700": 1, "100": 1}, "cups": {"100": 1}}
+        {
+            "ice": {"100": 1},
+            "sugar": {"100": 1},
+            "lemons": {"700": 1, "100": 1},
+            "cups": {"100": 1},
+        }
     )
     cups, cost = game.cup_cost({"ice": 1, "sugar": 1, "lemons": 2}, lots)
     assert cups == 100  # cups (and ice, sugar) run out first
-    # 200 lemons: 30 at 0.02, 30 at list 0.05, 100 from the undiscounted 100-pack, 40 at 0.04.
+    # 200 lemons: 30 at 0.02, 30 at list 0.05, 100 from the undiscounted 100-pack, 40 at
+    # 0.04.
     lemons = 30 * 0.02 + 30 * 0.05 + 100 * 0.05 + 40 * 0.04
     assert cost == round_cents((100 * 0.01 + 100 * 0.02 + lemons + 100 * 0.04) / 100)
 
@@ -510,7 +559,8 @@ def test_the_game_prices_held_stock_first_then_todays_packs_dearest_first():
 def test_a_sold_out_day_costs_exactly_what_the_plan_said():
     from app.core.preview import plan_preview
 
-    # 20 cups of stock and a cheap price: every cup sells, so the cups sold are the cups possible.
+    # 20 cups of stock and a cheap price: every cup sells, so the cups sold are the cups
+    # possible.
     day_plan = plan(
         purchases={
             "ice": {"100": 1},
@@ -539,7 +589,11 @@ def test_a_day_without_sales_holds_the_cost_of_the_cups_it_could_have_made():
     expected = game.cup_cost(day_plan.recipe, lots)
     record = game.run_day(day_plan)["record"]
     assert record["buyers"] == 0 and expected[0] == 50
-    assert record["cost_per_cup"] == expected[1] == round_cents(0.01 + 0.02 + 2 * 0.05 + 0.04)
+    assert (
+        record["cost_per_cup"]
+        == expected[1]
+        == round_cents(0.01 + 0.02 + 2 * 0.05 + 0.04)
+    )
 
     game.acknowledge_day(1)
     # No ice left (it melted overnight): not a single cup, so no cost at all.
@@ -547,7 +601,7 @@ def test_a_day_without_sales_holds_the_cost_of_the_cups_it_could_have_made():
 
 
 # ------------------------------------------------------- why people said no
-def test_only_a_refusal_that_would_have_bought_at_neutral_popularity_is_popularitys_doing():
+def test_only_a_refusal_that_neutral_popularity_would_have_sold_is_popularitys():
     assert refused_for_popularity(0.30, 0.40)
     assert not refused_for_popularity(0.40, 0.40)
     assert not refused_for_popularity(0.70, 0.40)
@@ -555,14 +609,20 @@ def test_only_a_refusal_that_would_have_bought_at_neutral_popularity_is_populari
 
 def example_day(starting_popularity: float, seed: int):
     """Defaults, day 1, Adults' favourite cup (1 ice, 1 sugar, 3 lemons) at $0.60."""
-    game = LemonadeGame(cfg(starting_popularity=starting_popularity, starting_cash=500), seed=seed)
+    game = LemonadeGame(
+        cfg(starting_popularity=starting_popularity, starting_cash=500), seed=seed
+    )
     big = {name: {"700": 1} for name in ("ice", "sugar", "lemons", "cups")}
-    return game.run_day(plan(purchases=big, recipe={"ice": 1, "sugar": 1, "lemons": 3}, price=0.6))
+    return game.run_day(
+        plan(purchases=big, recipe={"ice": 1, "sugar": 1, "lemons": 3}, price=0.6)
+    )
 
 
 def test_low_popularity_turns_most_adult_refusals_into_not_popular():
     adult = people_by_kind()["Adult"]
-    base = buy_probability(adult, 0.6, willingness_to_pay(adult, 1, cfg().quality_swing))
+    base = buy_probability(
+        adult, 0.6, willingness_to_pay(adult, 1, cfg().quality_swing)
+    )
     chance = apply_popularity(base, 0.1)
     reasons: Counter[str] = Counter()
     for seed in range(20):
@@ -571,9 +631,12 @@ def test_low_popularity_turns_most_adult_refusals_into_not_popular():
         for event in result["events"]:
             if event["type"] == "Adult" and event["outcome"] == "refused":
                 reasons[event["reason"]] += 1
-        assert sum(result["record"]["refusal_reasons"].values()) == result["record"]["refused"]
-    # Without popularity the cup is perfect and the price is under what they would pay, so
-    # the refusals popularity caused must say so rather than read "too pricey".
+        assert (
+            sum(result["record"]["refusal_reasons"].values())
+            == result["record"]["refused"]
+        )
+    # Without popularity the cup is perfect and the price is under what they would pay,
+    # so the refusals popularity caused must say so rather than read "too pricey".
     assert set(reasons) <= {"not_popular", "too_pricey"}
     share = reasons["not_popular"] / sum(reasons.values())
     assert share > 0.5
@@ -593,9 +656,27 @@ def test_popularity_of_a_half_or_more_never_causes_a_refusal(starting_popularity
 REPLAY = {
     "seed": 20261102,
     "days": [
-        {"visitors": 79, "buyers": 22, "sold_out": 0, "refused": 57, "events": "2d1bf4372dc6d86a"},
-        {"visitors": 131, "buyers": 0, "sold_out": 51, "refused": 80, "events": "b7190f88e394ff82"},
-        {"visitors": 79, "buyers": 15, "sold_out": 0, "refused": 64, "events": "15d22125feea69a0"},
+        {
+            "visitors": 79,
+            "buyers": 22,
+            "sold_out": 0,
+            "refused": 57,
+            "events": "2d1bf4372dc6d86a",
+        },
+        {
+            "visitors": 131,
+            "buyers": 0,
+            "sold_out": 51,
+            "refused": 80,
+            "events": "b7190f88e394ff82",
+        },
+        {
+            "visitors": 79,
+            "buyers": 15,
+            "sold_out": 0,
+            "refused": 64,
+            "events": "15d22125feea69a0",
+        },
     ],
     "cash_end": [82.7, 82.7, 93.7],
 }
@@ -615,7 +696,11 @@ def test_seeded_replays_are_unchanged():
             recipe={"ice": 1, "sugar": 1, "lemons": 3},
         ),
         plan(purchases={}, price=0.45, recipe={"ice": 2, "sugar": 2, "lemons": 2}),
-        plan(purchases={"ice": {"100": 1}}, price=0.8, recipe={"ice": 1, "sugar": 2, "lemons": 2}),
+        plan(
+            purchases={"ice": {"100": 1}},
+            price=0.8,
+            recipe={"ice": 1, "sugar": 2, "lemons": 2},
+        ),
     ]
     for day, (day_plan, want, cash) in enumerate(
         zip(plans, REPLAY["days"], REPLAY["cash_end"], strict=True), start=1
@@ -623,7 +708,8 @@ def test_seeded_replays_are_unchanged():
         result = game.run_day(day_plan)
         rec = result["record"]
         draws = [
-            (e["type"], e["outcome"], e["arrive_min"], e["probability"]) for e in result["events"]
+            (e["type"], e["outcome"], e["arrive_min"], e["probability"])
+            for e in result["events"]
         ]
         digest = hashlib.sha256(json.dumps(draws).encode()).hexdigest()[:16]
         got = {k: rec[k] for k in ("visitors", "buyers", "sold_out", "refused")} | {
@@ -637,10 +723,19 @@ def test_seeded_replays_are_unchanged():
 @pytest.mark.parametrize(
     "change, message",
     [
-        ({"purchases": {"lemons": {"100": -1}}}, "You can buy 0 to 100 packs of 100 lemons a day"),
-        ({"purchases": {"lemons": {"100": 101}}}, "You can buy 0 to 100 packs of 100 lemons a day"),
+        (
+            {"purchases": {"lemons": {"100": -1}}},
+            "You can buy 0 to 100 packs of 100 lemons a day",
+        ),
+        (
+            {"purchases": {"lemons": {"100": 101}}},
+            "You can buy 0 to 100 packs of 100 lemons a day",
+        ),
         ({"purchases": {"lemons": {"-100": 1}}}, "lemons is not sold in packs of -100"),
-        ({"recipe": {"ice": -1, "sugar": 1, "lemons": 2}}, "ice per cup must be between 0 and 5"),
+        (
+            {"recipe": {"ice": -1, "sugar": 1, "lemons": 2}},
+            "ice per cup must be between 0 and 5",
+        ),
         ({"price": -0.5}, "Price must be between 0.20 and 1.00"),
     ],
 )

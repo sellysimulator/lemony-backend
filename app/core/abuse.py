@@ -7,10 +7,10 @@ The limits are plain constants: change them here.
 
 Where they apply:
 - REST: `AbuseLimitMiddleware`, added in `app/main.py`. Every request counts against
-  `REST_LIMIT` per address, requests to `HEAVY_PATHS` and `HEAVY_PATH_PATTERNS` (the open
-  results route) against `HEAVY_LIMIT` as well, and a body larger than `MAX_BODY_BYTES`
-  is refused: unread when its `Content-Length` says so, else (a chunked body has none)
-  once the bytes read pass the cap. 429 / 413, JSON `detail`.
+  `REST_LIMIT` per address, requests to `HEAVY_PATHS` and `HEAVY_PATH_PATTERNS` (the
+  open results route) against `HEAVY_LIMIT` as well, and a body larger than
+  `MAX_BODY_BYTES` is refused: unread when its `Content-Length` says so, else (a chunked
+  body has none) once the bytes read pass the cap. 429 / 413, JSON `detail`.
 - Socket.IO: `SocketManager.connect` (open sockets and connects per address) and
   `guarded()` (events per sid, and `preview_plan` per sid, dropped unanswered;
   `create_game` per address, answered with `error {code: "RATE_LIMITED"}`).
@@ -109,7 +109,9 @@ class RateLimiter:
         self._windows.clear()
 
     def _prune(self, now: float) -> None:
-        ended = [k for k, (start, _) in self._windows.items() if now - start >= self.window]
+        ended = [
+            k for k, (start, _) in self._windows.items() if now - start >= self.window
+        ]
         for key in ended:
             del self._windows[key]
         excess = len(self._windows) - min(self.max_keys * 9 // 10, self.max_keys - 1)
@@ -126,7 +128,8 @@ create_game_limiter = RateLimiter(CREATE_GAME_LIMIT, CREATE_GAME_WINDOW)
 preview_limiter = RateLimiter(PREVIEW_LIMIT, PREVIEW_WINDOW)
 #: Keyed on sid: `SocketManager.disconnect` forgets the sid in each.
 SID_LIMITERS = (event_limiter, preview_limiter)
-#: Which branch of `client_ip` answered, each logged once per process (never the address).
+#: Which branch of `client_ip` answered, each logged once per process (never the
+#: address).
 _logged_ip_sources: set[str] = set()
 
 
@@ -151,7 +154,8 @@ def _log_ip_source(source: str) -> None:
 
 
 def client_ip(scope: Mapping[str, Any]) -> str:
-    """The caller's address for an ASGI scope (REST, or Socket.IO's `environ["asgi.scope"]`).
+    """The caller's address for an ASGI scope (REST, or Socket.IO's
+    `environ["asgi.scope"]`).
 
     Order: the `cf-connecting-ip` header if non-empty, else the RIGHTMOST non-empty
     `X-Forwarded-For` entry, else the ASGI peer.
@@ -173,13 +177,16 @@ def client_ip(scope: Mapping[str, Any]) -> str:
                 _log_ip_source("cf-connecting-ip")
                 return cf[:64]
     forwarded = [
-        value.decode("latin-1") for name, value in headers if name.lower() == b"x-forwarded-for"
+        value.decode("latin-1")
+        for name, value in headers
+        if name.lower() == b"x-forwarded-for"
     ]
     if forwarded:
         entries = [e.strip() for e in ",".join(forwarded).split(",")]
         last = next((e for e in reversed(entries) if e), "")
         if last:
-            # The client picks how many entries it sends: cap the label so it stays bounded.
+            # The client picks how many entries it sends: cap the label so it stays
+            # bounded.
             count = sum(1 for e in entries if e)
             _log_ip_source(f"x-forwarded-for ({count if count <= 3 else '3+'} entries)")
             return last[:64]
@@ -217,7 +224,10 @@ async def _read_body(receive: Receive) -> tuple[list[Message], bool]:
 
 async def _reply(send: Send, status: int, detail: str) -> None:
     body = json.dumps({"detail": detail}).encode()
-    headers = [(b"content-type", b"application/json"), (b"content-length", b"%d" % len(body))]
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", b"%d" % len(body)),
+    ]
     if status == 429:
         headers.append((b"retry-after", b"%d" % int(REST_WINDOW)))
     await send({"type": "http.response.start", "status": status, "headers": headers})
@@ -228,12 +238,14 @@ def is_heavy_path(path: str) -> bool:
     """Whether a REST path counts against `HEAVY_LIMIT` as well as `REST_LIMIT`."""
     path = path.rstrip("/")
     return path in HEAVY_PATHS or any(
-        path.startswith(prefix) and path.endswith(suffix) for prefix, suffix in HEAVY_PATH_PATTERNS
+        path.startswith(prefix) and path.endswith(suffix)
+        for prefix, suffix in HEAVY_PATH_PATTERNS
     )
 
 
 class AbuseLimitMiddleware:
-    """Pure ASGI middleware for the REST app: 429 over a rate limit, 413 over the body cap.
+    """Pure ASGI middleware for the REST app: 429 over a rate limit, 413 over the body
+    cap.
 
     Add it before `CORSMiddleware`, so CORS wraps it and a 429 still carries the CORS
     headers a browser needs to read it.

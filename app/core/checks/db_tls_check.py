@@ -21,15 +21,17 @@ def check_db_tls() -> None:
         return
     if settings.DB_SSL_CA.strip():
         logger.info(
-            "PostgreSQL TLS is required and verified against DB_SSL_CA (sslmode=verify-full)."
+            "PostgreSQL TLS is required and verified against DB_SSL_CA "
+            "(sslmode=verify-full)."
         )
     elif settings.DB_REQUIRE_SSL:
         logger.warning(
-            "DB_SSL_CA is not set: PostgreSQL connections are encrypted (sslmode=require), "
-            "but the server certificate is NOT verified."
+            "DB_SSL_CA is not set: PostgreSQL connections are encrypted "
+            "(sslmode=require), but the server certificate is NOT verified."
         )
     else:
         logger.warning(
-            "DB_REQUIRE_SSL is false and DB_SSL_CA is not set: PostgreSQL connections are "
-            "not required to use TLS and fall back to plaintext if the server offers none."
+            "DB_REQUIRE_SSL is false and DB_SSL_CA is not set: PostgreSQL connections "
+            "are not required to use TLS and fall back to plaintext if the server "
+            "offers none."
         )
