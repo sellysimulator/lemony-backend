@@ -3,7 +3,8 @@
 Refusals must look exactly like `submit_day`'s (same code, same message) but travel
 inside the reply, never as an `error` event. The reply goes to the asking sid only,
 carries no `seq`, and changes nothing. The rate limit is `core/abuse.py`'s
-`preview_limiter`, applied by `guarded(per_sid=...)`; counts start at zero in every test.
+`preview_limiter`, applied by `guarded(per_sid=...)`; counts start at zero in every
+test.
 """
 
 from __future__ import annotations
@@ -27,7 +28,12 @@ from app.sockets.manager import sio, socket_manager
 
 from ..conftest import Recorder, new_guest
 
-PURCHASES = {"ice": {"100": 1}, "sugar": {"100": 1}, "lemons": {"100": 1}, "cups": {"100": 1}}
+PURCHASES = {
+    "ice": {"100": 1},
+    "sugar": {"100": 1},
+    "lemons": {"100": 1},
+    "cups": {"100": 1},
+}
 RECIPE = {"ice": 2, "sugar": 2, "lemons": 3}
 NO_GAME = "That game does not exist or is not yours."
 
@@ -70,7 +76,9 @@ def previews(emits: Recorder) -> list[Any]:
     return emits.of("plan_preview")
 
 
-async def submit_error(emits: Recorder, sid: str, body: dict[str, Any]) -> dict[str, Any]:
+async def submit_error(
+    emits: Recorder, sid: str, body: dict[str, Any]
+) -> dict[str, Any]:
     """What `submit_day` answers to the same plan (price added, request_id dropped)."""
     before = len(emits.of("error"))
     payload = {k: v for k, v in body.items() if k != "request_id"}
@@ -137,7 +145,9 @@ async def test_a_price_is_judged_and_priced_inside_the_reply(emits):
 
 
 @pytest.mark.asyncio
-async def test_a_price_out_of_range_is_not_a_refusal_but_carries_submit_days_message(emits):
+async def test_a_price_out_of_range_is_not_a_refusal_but_carries_submit_days_message(
+    emits,
+):
     sid, _, game_id = await start(emits)
     emits.events.clear()
 
@@ -158,8 +168,13 @@ async def test_a_price_that_is_not_a_number_refuses_like_submit_day(emits):
     await preview_plan(sid, request(game_id, price="cheap"))
 
     reply = previews(emits)[0]
-    assert reply["error"]["code"] == "INVALID_PLAN" and "price" in reply["error"]["message"]
-    assert reply["error"] == await submit_error(emits, sid, request(game_id, price="cheap"))
+    assert (
+        reply["error"]["code"] == "INVALID_PLAN"
+        and "price" in reply["error"]["message"]
+    )
+    assert reply["error"] == await submit_error(
+        emits, sid, request(game_id, price="cheap")
+    )
 
 
 @pytest.mark.asyncio
@@ -171,8 +186,12 @@ async def test_previews_do_not_change_the_day_that_is_then_played(emits):
     expected = gs.engine_of(document).run_day(plan)["record"]
 
     for i in range(3):
-        await preview_plan(sid, request(game_id, request_id=f"p{i}", recipe={**RECIPE, "ice": i}))
-    await game.submit_day(sid, {"game_id": game_id, "day": 1, "price": 0.6, **request(game_id)})
+        await preview_plan(
+            sid, request(game_id, request_id=f"p{i}", recipe={**RECIPE, "ice": i})
+        )
+    await game.submit_day(
+        sid, {"game_id": game_id, "day": 1, "price": 0.6, **request(game_id)}
+    )
     assert emits.of("day_result")[0]["record"] == expected
 
 
@@ -180,7 +199,14 @@ async def test_previews_do_not_change_the_day_that_is_then_played(emits):
 async def test_preview_follows_the_game_to_the_next_day(emits):
     sid, _, game_id = await start(emits)
     await game.submit_day(
-        sid, {"game_id": game_id, "day": 1, "price": 0.5, "purchases": PURCHASES, "recipe": RECIPE}
+        sid,
+        {
+            "game_id": game_id,
+            "day": 1,
+            "price": 0.5,
+            "purchases": PURCHASES,
+            "recipe": RECIPE,
+        },
     )
     await game.ack_day(sid, {"game_id": game_id, "day": 1})
     emits.events.clear()
@@ -273,7 +299,10 @@ async def test_invalid_plans_are_refused_like_submit_day_inside_the_reply(
     reply = previews(emits)[0]
     assert "seq" not in reply and set(reply) == {"request_id", "day", "error"}
     assert reply["request_id"] == "r1" and reply["day"] == 1
-    assert reply["error"]["code"] == "INVALID_PLAN" and message_part in reply["error"]["message"]
+    assert (
+        reply["error"]["code"] == "INVALID_PLAN"
+        and message_part in reply["error"]["message"]
+    )
     assert reply["error"] == await submit_error(emits, sid, body)
 
 
@@ -286,7 +315,9 @@ async def test_other_identitys_game_reads_as_no_game(emits):
 
     await preview_plan(thief, request(game_id))
 
-    assert not emits.of("error") and len(emits.events) == 1 and emits.events[0][0] == thief
+    assert (
+        not emits.of("error") and len(emits.events) == 1 and emits.events[0][0] == thief
+    )
     reply = previews(emits)[0]
     assert reply == {
         "request_id": "r1",
@@ -303,7 +334,9 @@ async def test_a_missing_game_is_no_game(emits, game_id):
     emits.events.clear()
     await preview_plan(sid, request(game_id))
     reply = previews(emits)[0]
-    assert reply["error"] == {"code": "NO_GAME", "message": NO_GAME} and not emits.of("error")
+    assert reply["error"] == {"code": "NO_GAME", "message": NO_GAME} and not emits.of(
+        "error"
+    )
 
 
 @pytest.mark.asyncio
@@ -329,7 +362,11 @@ async def test_checks_run_in_submit_days_order(emits):
     await preview_plan(sid, request("nope", day="x", recipe="bad"))
     await preview_plan(sid, request(game_id, request_id="r2", day=2, recipe="bad"))
     await preview_plan(sid, request(game_id, request_id="r3", day="x", recipe="bad"))
-    assert [p["error"]["code"] for p in previews(emits)] == ["NO_GAME", "WRONG_DAY", "INVALID_PLAN"]
+    assert [p["error"]["code"] for p in previews(emits)] == [
+        "NO_GAME",
+        "WRONG_DAY",
+        "INVALID_PLAN",
+    ]
     assert previews(emits)[2]["error"]["message"] == "day must be a number"
 
 
@@ -342,7 +379,10 @@ async def test_another_day_is_wrong_day(emits):
     first, second = previews(emits)
     assert first["day"] == 2 and second["day"] == 0
     assert first["error"] == {"code": "WRONG_DAY", "message": "It is day 1, not day 2."}
-    assert second["error"] == {"code": "WRONG_DAY", "message": "It is day 1, not day 0."}
+    assert second["error"] == {
+        "code": "WRONG_DAY",
+        "message": "It is day 1, not day 0.",
+    }
     assert not emits.of("error")
     assert first["error"] == await submit_error(emits, sid, request(game_id, day=2))
 
@@ -351,7 +391,14 @@ async def test_another_day_is_wrong_day(emits):
 async def test_a_played_day_is_wrong_day(emits):
     sid, _, game_id = await start(emits, days=2)
     await game.submit_day(
-        sid, {"game_id": game_id, "day": 1, "price": 0.5, "purchases": PURCHASES, "recipe": RECIPE}
+        sid,
+        {
+            "game_id": game_id,
+            "day": 1,
+            "price": 0.5,
+            "purchases": PURCHASES,
+            "recipe": RECIPE,
+        },
     )
     emits.events.clear()
     before = await state_service.state_svc.get_game(game_id)
@@ -360,8 +407,14 @@ async def test_a_played_day_is_wrong_day(emits):
     await preview_plan(sid, request(game_id, request_id="b", day=2))
 
     played, next_day = previews(emits)
-    assert played["error"] == {"code": "WRONG_DAY", "message": "It is day 1, not day 1."}
-    assert next_day["error"] == {"code": "WRONG_DAY", "message": "It is day 1, not day 2."}
+    assert played["error"] == {
+        "code": "WRONG_DAY",
+        "message": "It is day 1, not day 1.",
+    }
+    assert next_day["error"] == {
+        "code": "WRONG_DAY",
+        "message": "It is day 1, not day 2.",
+    }
     assert not emits.of("error") and len(emits.events) == 2
     assert await state_service.state_svc.get_game(game_id) == before
 
@@ -370,7 +423,14 @@ async def test_a_played_day_is_wrong_day(emits):
 async def test_a_finished_game_is_wrong_day(emits):
     sid, _, game_id = await start(emits, days=1)
     await game.submit_day(
-        sid, {"game_id": game_id, "day": 1, "price": 0.5, "purchases": PURCHASES, "recipe": RECIPE}
+        sid,
+        {
+            "game_id": game_id,
+            "day": 1,
+            "price": 0.5,
+            "purchases": PURCHASES,
+            "recipe": RECIPE,
+        },
     )
     assert emits.of("game_finished")
     emits.events.clear()
@@ -392,7 +452,9 @@ def test_limit_constants():
 
 
 @pytest.mark.asyncio
-async def test_the_sixth_request_in_a_window_gets_no_reply_until_the_window_passes(emits, clock):
+async def test_the_sixth_request_in_a_window_gets_no_reply_until_the_window_passes(
+    emits, clock
+):
     sid, _, game_id = await start(emits)
     emits.events.clear()
     for i in range(PREVIEW_LIMIT):
@@ -406,7 +468,10 @@ async def test_the_sixth_request_in_a_window_gets_no_reply_until_the_window_pass
 
     clock[0] += PREVIEW_WINDOW + 0.5  # every earlier request is out of the window
     await preview_plan(sid, request(game_id, request_id="again"))
-    assert previews(emits)[-1]["request_id"] == "again" and "error" not in previews(emits)[-1]
+    assert (
+        previews(emits)[-1]["request_id"] == "again"
+        and "error" not in previews(emits)[-1]
+    )
 
 
 @pytest.mark.asyncio
@@ -429,7 +494,9 @@ async def test_the_limit_is_per_sid(emits, clock):
     for i in range(PREVIEW_LIMIT + 1):
         await preview_plan(sid, request(game_id, request_id=f"a{i}"))
     await preview_plan(other, request(game_id, request_id="b0"))
-    replies = [(to, d["request_id"]) for to, e, d in emits.events if e == "plan_preview"]
+    replies = [
+        (to, d["request_id"]) for to, e, d in emits.events if e == "plan_preview"
+    ]
     assert (other, "b0") in replies
     assert sum(1 for to, _ in replies if to == sid) == PREVIEW_LIMIT
 

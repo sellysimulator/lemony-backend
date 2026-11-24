@@ -91,12 +91,17 @@ def _day_row(game_id: int, d: dict[str, Any]) -> dict[str, Any]:
         "recipe_ice": d["recipe"]["ice"],
         "recipe_sugar": d["recipe"]["sugar"],
         "recipe_lemons": d["recipe"]["lemons"],
-        "cost_per_cup": None if d["cost_per_cup"] is None else _money(d["cost_per_cup"]),
+        "cost_per_cup": (
+            None if d["cost_per_cup"] is None else _money(d["cost_per_cup"])
+        ),
         "bought_ice": d["purchased"]["ice"],
         "bought_sugar": d["purchased"]["sugar"],
         "bought_lemons": d["purchased"]["lemons"],
         "bought_cups": d["purchased"]["cups"],
-        **{f"inventory_open_{name}": inventory_open.get(name) for name in INGREDIENT_NAMES},
+        **{
+            f"inventory_open_{name}": inventory_open.get(name)
+            for name in INGREDIENT_NAMES
+        },
         "spend": _money(d["spend"]),
         "revenue": _money(d["revenue"]),
         "profit": _money(d["profit"]),
@@ -111,18 +116,25 @@ def _day_row(game_id: int, d: dict[str, Any]) -> dict[str, Any]:
         "perished_cups": d["perished"]["cups"],
         "perished_value": _money(d["perished_value"]),
         "cash_end": _money(d["cash_end"]),
-        **{f"inventory_end_{name}": inventory_end.get(name) for name in INGREDIENT_NAMES},
+        **{
+            f"inventory_end_{name}": inventory_end.get(name)
+            for name in INGREDIENT_NAMES
+        },
         "refusal_reasons": d["refusal_reasons"],
     }
 
 
-def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any]) -> Game:
+def persist_game(
+    db: Session, document: dict[str, Any], summary: dict[str, Any]
+) -> Game:
     """Insert the finished game (or return the stored copy); the caller commits.
 
     Writes the game only: the player's stats are recomputed after the commit.
     """
     public_id = document["game_id"]
-    existing = db.execute(select(Game).where(Game.public_id == public_id)).scalar_one_or_none()
+    existing = db.execute(
+        select(Game).where(Game.public_id == public_id)
+    ).scalar_one_or_none()
     if existing is not None:
         return existing
 
@@ -175,7 +187,11 @@ def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any])
             ],
         )
         hours = [
-            {"game_id": game.id, "day": d["day"], **{key: h[key] for key in _HOUR_FIELDS}}
+            {
+                "game_id": game.id,
+                "day": d["day"],
+                **{key: h[key] for key in _HOUR_FIELDS},
+            }
             for d in days
             for h in d["by_hour"]
         ]
@@ -185,7 +201,9 @@ def persist_game(db: Session, document: dict[str, Any], summary: dict[str, Any])
     return game
 
 
-def _save_game(document: dict[str, Any], summary: dict[str, Any]) -> tuple[str, int | None] | None:
+def _save_game(
+    document: dict[str, Any], summary: dict[str, Any]
+) -> tuple[str, int | None] | None:
     """Commit the game in its own transaction: (public id, owner's user id), or None."""
     from ..db import session as db_session
 
@@ -200,7 +218,9 @@ def _save_game(document: dict[str, Any], summary: dict[str, Any]) -> tuple[str, 
         db.rollback()
         try:
             row = db.execute(
-                select(Game.public_id, Game.user_id).where(Game.public_id == document["game_id"])
+                select(Game.public_id, Game.user_id).where(
+                    Game.public_id == document["game_id"]
+                )
             ).one_or_none()
         except Exception:
             logger.exception("Failed to persist finished game.")
@@ -214,7 +234,9 @@ def _save_game(document: dict[str, Any], summary: dict[str, Any]) -> tuple[str, 
         db.close()
 
 
-def persist_finished_game(document: dict[str, Any], summary: dict[str, Any]) -> str | None:
+def persist_finished_game(
+    document: dict[str, Any], summary: dict[str, Any]
+) -> str | None:
     saved = _save_game(document, summary)
     if saved is None:
         return None
@@ -256,9 +278,13 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
     days_rows = db.execute(
         select(GameDay).where(GameDay.game_id == game.id).order_by(GameDay.day)
     ).scalars()
-    types = db.execute(select(GameDayType).where(GameDayType.game_id == game.id)).scalars()
+    types = db.execute(
+        select(GameDayType).where(GameDayType.game_id == game.id)
+    ).scalars()
     hours = db.execute(
-        select(GameDayHour).where(GameDayHour.game_id == game.id).order_by(GameDayHour.hour)
+        select(GameDayHour)
+        .where(GameDayHour.game_id == game.id)
+        .order_by(GameDayHour.hour)
     ).scalars()
     by_type: dict[int, dict[str, Any]] = {}
     for t in types:
@@ -270,7 +296,12 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
     by_hour: dict[int, list[dict[str, Any]]] = {}
     for h in hours:
         by_hour.setdefault(h.day, []).append(
-            {"hour": h.hour, "visitors": h.visitors, "buyers": h.buyers, "sold_out": h.sold_out}
+            {
+                "hour": h.hour,
+                "visitors": h.visitors,
+                "buyers": h.buyers,
+                "sold_out": h.sold_out,
+            }
         )
     days: list[dict[str, Any]] = []
     for d in days_rows:
@@ -280,9 +311,15 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
             "weather": d.weather,
             "temperature": float(d.temperature),
             "price": float(d.price),
-            "recipe": {"ice": d.recipe_ice, "sugar": d.recipe_sugar, "lemons": d.recipe_lemons},
+            "recipe": {
+                "ice": d.recipe_ice,
+                "sugar": d.recipe_sugar,
+                "lemons": d.recipe_lemons,
+            },
             "cost_per_cup": _f(d.cost_per_cup),
-            "purchased": {name: getattr(d, f"bought_{name}") for name in INGREDIENT_NAMES},
+            "purchased": {
+                name: getattr(d, f"bought_{name}") for name in INGREDIENT_NAMES
+            },
             "spend": float(d.spend),
             "revenue": float(d.revenue),
             "profit": float(d.profit),
@@ -299,11 +336,17 @@ def load_game_detail(db: Session, game: Game) -> dict[str, Any]:
             "by_hour": by_hour.get(d.day, []),
             "refusal_reasons": d.refusal_reasons,
         }
-        inventory_end = {name: getattr(d, f"inventory_end_{name}") for name in INGREDIENT_NAMES}
-        if None not in inventory_end.values():  # absent on games stored before it was kept
+        inventory_end = {
+            name: getattr(d, f"inventory_end_{name}") for name in INGREDIENT_NAMES
+        }
+        # Absent on games stored before it was kept
+        if None not in inventory_end.values():
             day["inventory_end"] = inventory_end
-        inventory_open = {name: getattr(d, f"inventory_open_{name}") for name in INGREDIENT_NAMES}
-        if None not in inventory_open.values():  # absent on games stored before it was kept
+        inventory_open = {
+            name: getattr(d, f"inventory_open_{name}") for name in INGREDIENT_NAMES
+        }
+        # Absent on games stored before it was kept
+        if None not in inventory_open.values():
             day["inventory_open"] = inventory_open
         days.append(day)
     detail = summarize(
@@ -327,7 +370,9 @@ def find_game_by_public_id(db: Session, public_id: str) -> Game | None:
     """The stored game with this public id, or None. A malformed id is None unread."""
     if not _PUBLIC_ID_RE.fullmatch(public_id):
         return None
-    return db.execute(select(Game).where(Game.public_id == public_id)).scalar_one_or_none()
+    return db.execute(
+        select(Game).where(Game.public_id == public_id)
+    ).scalar_one_or_none()
 
 
 #: In the owner's detail, not on the open results page: the settings feed only the end

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.live_game import LiveGame
@@ -22,7 +23,14 @@ def frozen(monkeypatch: pytest.MonkeyPatch) -> datetime:
     return NOW
 
 
-def _expire_at(sessions: Callable[[], Session], key: str, when: datetime | None) -> None:
+def _keys(sessions: Callable[[], Session]) -> set[str]:
+    with sessions() as db:
+        return set(db.execute(select(LiveGame.state_key)).scalars())
+
+
+def _expire_at(
+    sessions: Callable[[], Session], key: str, when: datetime | None
+) -> None:
     with sessions() as db:
         row = db.get(LiveGame, key)
         assert row is not None
@@ -30,7 +38,9 @@ def _expire_at(sessions: Callable[[], Session], key: str, when: datetime | None)
         db.commit()
 
 
-def test_set_get_expire_delete(db_sessions: Callable[[], Session], frozen: datetime) -> None:
+def test_set_get_expire_delete(
+    db_sessions: Callable[[], Session], frozen: datetime
+) -> None:
     backend = SqlStateBackend(db_sessions)
     backend._setex_sync("game:a", 60, "v1")
     backend._setex_sync("game:a", 60, "v2")  # an overwrite, not a second row
@@ -48,7 +58,9 @@ def test_set_get_expire_delete(db_sessions: Callable[[], Session], frozen: datet
     assert backend._get_sync("game:b") is None
 
 
-def test_expiry_boundary_second(db_sessions: Callable[[], Session], frozen: datetime) -> None:
+def test_expiry_boundary_second(
+    db_sessions: Callable[[], Session], frozen: datetime
+) -> None:
     """A row is gone at its expiry instant (`<=`), and alive one second before it."""
     backend = SqlStateBackend(db_sessions)
     backend._setex_sync("game:edge", 60, "v")
@@ -58,12 +70,12 @@ def test_expiry_boundary_second(db_sessions: Callable[[], Session], frozen: date
     _expire_at(db_sessions, "game:alive", frozen + timedelta(seconds=1))
 
     assert backend.purge_expired_sync() == 1
-    assert set(backend.keys_sync()) == {"game:alive", "game:forever"}
+    assert _keys(db_sessions) == {"game:alive", "game:forever"}
     assert backend._get_sync("game:alive") == "v"
 
     _expire_at(db_sessions, "game:alive", frozen)
     assert backend._get_sync("game:alive") is None  # expired on read, and deleted
-    assert backend.keys_sync() == ["game:forever"]
+    assert _keys(db_sessions) == {"game:forever"}
 
 
 def test_keys_are_case_sensitive_and_take_long_identities(

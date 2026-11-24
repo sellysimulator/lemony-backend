@@ -55,7 +55,8 @@ async def test_waiting_for_a_held_lock_times_out():
         with pytest.raises(TimeoutError):
             async with backend.lock("k", timeout=0.05):
                 pytest.fail("the lock is held")  # pragma: no cover
-    async with backend.lock("k", timeout=0.05):  # free again: no leftover waiter holds it
+    # Free again: no leftover waiter holds it
+    async with backend.lock("k", timeout=0.05):
         pass
 
 
@@ -97,12 +98,19 @@ async def test_a_malformed_game_id_is_refused_before_any_lock(
 @pytest.mark.parametrize("data", [None, "x", 5, [1], {"game_id": {"a": 1}}])
 async def test_a_payload_of_any_shape_gets_a_refusal_not_a_crash(emits, data):
     await connect("s1", {"guestId": new_guest()})
-    for handler in (game.submit_day, game.ack_day, game.abandon_game, game.request_state):
+    for handler in (
+        game.submit_day,
+        game.ack_day,
+        game.abandon_game,
+        game.request_state,
+    ):
         await handler("s1", data)
     assert [e["code"] for e in emits.of("error")] == ["NO_GAME"] * 4
 
 
-def test_an_oversized_id_token_is_refused_unparsed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_oversized_id_token_is_refused_unparsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def unreachable() -> None:
         raise AssertionError("an oversized token reached Firebase")
 
@@ -111,7 +119,9 @@ def test_an_oversized_id_token_is_refused_unparsed(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_token_verification_runs_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_token_verification_runs_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     on_loop_thread: list[bool] = []
 
     def verify(token: str) -> dict | None:

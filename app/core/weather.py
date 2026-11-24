@@ -38,7 +38,9 @@ def weathers_at(config: GameConfig, temperature: float) -> list[str]:
     range, the first in WEATHER_TYPES order on a tie.
     """
     ranges = config.weather_temperature_ranges
-    matches = [w for w in WEATHER_TYPES if ranges[w].min <= temperature <= ranges[w].max]
+    matches = [
+        w for w in WEATHER_TYPES if ranges[w].min <= temperature <= ranges[w].max
+    ]
     if not matches:
         matches = [
             min(
@@ -59,10 +61,11 @@ def roll_day_weather(config: GameConfig, rng: random.Random) -> tuple[str, float
 
 
 def _draw_steps(config: GameConfig) -> Iterator[tuple[float, float]]:
-    """Every temperature ``roll_day_weather`` can give, with the share of draws that give it.
+    """Every temperature ``roll_day_weather`` can give, with the share of draws that
+    give it.
 
-    Every stretch of the uniform draw that rounds to one 0.5 °C step gives one temperature
-    (``day_temperature`` of a draw inside it).
+    Every stretch of the uniform draw that rounds to one 0.5 °C step gives one
+    temperature (``day_temperature`` of a draw inside it).
     """
     lo = config.min_max_values.temperature.min
     hi = config.min_max_values.temperature.max

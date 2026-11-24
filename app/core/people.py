@@ -27,7 +27,8 @@ class Denominators:
 
 @dataclass(frozen=True)
 class Tolerances:
-    """``(below, above)`` per factor. Ingredients in units; price as a share of the budget."""
+    """``(below, above)`` per factor. Ingredients in units; price as a share of the
+    budget."""
 
     ice: tuple[float, float]
     sugar: tuple[float, float]

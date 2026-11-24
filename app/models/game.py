@@ -26,11 +26,15 @@ class Game(Base, TimestampMixin):
     __tablename__ = "games"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    public_id: Mapped[str] = mapped_column(String(32), nullable=False, unique=True, index=True)
+    public_id: Mapped[str] = mapped_column(
+        String(32), nullable=False, unique=True, index=True
+    )
     user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    guest_identity: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    guest_identity: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     rng_seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
     num_days: Mapped[int] = mapped_column(Integer, nullable=False)
     days_played: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -45,8 +49,12 @@ class Game(Base, TimestampMixin):
     # Null for games finished before popularity existed.
     final_popularity: Mapped[Decimal | None] = mapped_column(SHARE, nullable=True)
     # Aware UTC (`timestamptz`), from the live document's `started_at` / `finished_at`.
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class GameConfigRow(Base):
@@ -63,7 +71,9 @@ class GameDay(Base):
     __table_args__ = (UniqueConstraint("game_id", "day", name="uq_game_days_game_day"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    game_id: Mapped[int] = mapped_column(
+        ForeignKey("games.id", ondelete="CASCADE"), nullable=False
+    )
     day: Mapped[int] = mapped_column(Integer, nullable=False)
     weather: Mapped[str] = mapped_column(String(16), nullable=False)
     temperature: Mapped[Decimal] = mapped_column(Numeric(5, 1), nullable=False)
@@ -91,7 +101,8 @@ class GameDay(Base):
     buyers: Mapped[int] = mapped_column(Integer, nullable=False)
     sold_out: Mapped[int] = mapped_column(Integer, nullable=False)
     refused: Mapped[int] = mapped_column(Integer, nullable=False)
-    # The popularity applied that day; null for games finished before popularity existed.
+    # The popularity applied that day; null for games finished before popularity
+    # existed.
     popularity: Mapped[Decimal | None] = mapped_column(SHARE, nullable=True)
     perished_ice: Mapped[int] = mapped_column(Integer, nullable=False)
     perished_sugar: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -109,10 +120,14 @@ class GameDay(Base):
 
 class GameDayType(Base):
     __tablename__ = "game_day_types"
-    __table_args__ = (UniqueConstraint("game_id", "day", "person_type", name="uq_game_day_types"),)
+    __table_args__ = (
+        UniqueConstraint("game_id", "day", "person_type", name="uq_game_day_types"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    game_id: Mapped[int] = mapped_column(
+        ForeignKey("games.id", ondelete="CASCADE"), nullable=False
+    )
     day: Mapped[int] = mapped_column(Integer, nullable=False)
     person_type: Mapped[str] = mapped_column(String(16), nullable=False)
     visitors: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -122,10 +137,14 @@ class GameDayType(Base):
 
 class GameDayHour(Base):
     __tablename__ = "game_day_hours"
-    __table_args__ = (UniqueConstraint("game_id", "day", "hour", name="uq_game_day_hours"),)
+    __table_args__ = (
+        UniqueConstraint("game_id", "day", "hour", name="uq_game_day_hours"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    game_id: Mapped[int] = mapped_column(
+        ForeignKey("games.id", ondelete="CASCADE"), nullable=False
+    )
     day: Mapped[int] = mapped_column(Integer, nullable=False)
     hour: Mapped[int] = mapped_column(Integer, nullable=False)
     visitors: Mapped[int] = mapped_column(Integer, nullable=False)

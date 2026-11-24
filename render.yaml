@@ -11,7 +11,9 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
+    region: virginia
     plan: free
+    numInstances: 1  # the game locks and rate limits live in this process
     healthCheckPath: /api/v1/health
     # Render deploys a push to the linked branch only once every GitHub check
     # on that commit has passed -- this IS the CI gate. There is deliberately no
@@ -22,7 +24,7 @@ services:
       - key: DEBUG
         value: "false"
       - key: CORS_ORIGINS
-        value: '["https://lemonysim.web.app","http://localhost:5173"]'
+        value: '["https://lemonysim.web.app","https://lemonysim.firebaseapp.com"]'
       - key: DB_HOST
         sync: false
       - key: DB_PORT

@@ -20,7 +20,9 @@ sio = AsyncServer(
     async_mode="asgi",
     # `None` selects the in-process manager. Cross-instance fan-out needs Redis,
     # so this moves together with `REDIS_ENABLED`.
-    client_manager=(AsyncRedisManager(settings.REDIS_URL) if settings.REDIS_ENABLED else None),
+    client_manager=(
+        AsyncRedisManager(settings.REDIS_URL) if settings.REDIS_ENABLED else None
+    ),
     cors_allowed_origins=settings.CORS_ORIGINS,
     # Never hardcoded to True: engine.io logs every packet's full payload at INFO.
     logger=settings.DEBUG,
@@ -45,10 +47,15 @@ class SocketManager:
         self.sockets_per_ip: dict[str, int] = {}
 
     async def connect(self, sid: str, environ: dict) -> bool:
-        """Admit a socket; False when its address has too many open or connects too fast."""
+        """Admit a socket; False when its address has too many open or connects too
+        fast."""
         ip = client_ip(environ.get("asgi.scope") or {})
-        if self.sockets_per_ip.get(ip, 0) >= MAX_SOCKETS_PER_IP or not connect_limiter.hit(ip):
-            logger.warning("Refusing sid %s: too many connections from one address.", sid)
+        if self.sockets_per_ip.get(
+            ip, 0
+        ) >= MAX_SOCKETS_PER_IP or not connect_limiter.hit(ip):
+            logger.warning(
+                "Refusing sid %s: too many connections from one address.", sid
+            )
             return False
         self.sid_to_ip[sid] = ip
         self.sockets_per_ip[ip] = self.sockets_per_ip.get(ip, 0) + 1

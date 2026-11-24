@@ -81,8 +81,8 @@ def refresh_user_stats(user_id: int, public_id: str | None = None) -> bool:
     except Exception:
         db.rollback()
         logger.exception(
-            "Failed to recompute player stats (user_id=%s, game=%s); the saved games are "
-            "kept and the next read of the stats repairs them.",
+            "Failed to recompute player stats (user_id=%s, game=%s); the saved games "
+            "are kept and the next read of the stats repairs them.",
             user_id,
             public_id,
         )
@@ -106,7 +106,9 @@ def current_user_stats(db: Session, user_id: int) -> UserStats | None:
     tries again.
     """
     stats = db.get(UserStats, user_id)
-    stored = db.execute(select(func.count(Game.id)).where(Game.user_id == user_id)).scalar_one()
+    stored = db.execute(
+        select(func.count(Game.id)).where(Game.user_id == user_id)
+    ).scalar_one()
     if (stats.games_played if stats is not None else 0) == stored:
         return stats
     try:

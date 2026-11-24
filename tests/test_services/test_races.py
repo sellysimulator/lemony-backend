@@ -56,7 +56,12 @@ async def test_a_day_whose_game_is_abandoned_meanwhile_sends_nothing(
     monkeypatch.setattr(gs, "submit_day", then_abandoned)
     await game.submit_day("s1", {"game_id": game_id, "day": 1, **PLAN})
 
-    for event in ("day_result", "game_finished", "game_persisted", "game_persist_failed"):
+    for event in (
+        "day_result",
+        "game_finished",
+        "game_persisted",
+        "game_persist_failed",
+    ):
         assert not emits.of(event), event
     assert await state_svc.get_game(game_id) is None
     with SessionLocal() as db:
@@ -91,7 +96,9 @@ async def replace_during_a_submission(
     monkeypatch.setattr(state_svc, "save_game", gated_save)
     monkeypatch.setattr(state_svc, "lock", watched_lock)
 
-    submit = asyncio.create_task(gs.submit_day(guest, {"game_id": old_id, "day": 1, **PLAN}))
+    submit = asyncio.create_task(
+        gs.submit_day(guest, {"game_id": old_id, "day": 1, **PLAN})
+    )
     await holding.wait()
     create = asyncio.create_task(gs.create_game(guest, config(), replace=True))
     waiting = asyncio.create_task(contended.wait())
@@ -122,7 +129,9 @@ async def test_a_game_that_finishes_while_being_replaced_is_saved_not_dropped(
     finished, so it is saved (as any finished active game is) rather than deleted."""
     guest, old_id, new_id = await replace_during_a_submission(monkeypatch, days=1)
     with SessionLocal() as db:
-        assert db.scalars(select(Game).where(Game.public_id == old_id)).first() is not None
+        assert (
+            db.scalars(select(Game).where(Game.public_id == old_id)).first() is not None
+        )
     old = await state_svc.get_game(old_id)
     assert old is not None and old["persisted"]
     assert await state_svc.get_active_game_id(guest) == new_id != old_id

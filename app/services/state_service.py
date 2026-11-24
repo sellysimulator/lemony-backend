@@ -35,7 +35,9 @@ _GUEST_PREFIX = "guest_"
 # Redis expires keys itself). Without it they go only at startup or when read.
 PURGE_EVERY_SECONDS = 600.0
 
-redis_client: StateBackend = build_state_backend(settings.REDIS_ENABLED, settings.REDIS_URL)
+redis_client: StateBackend = build_state_backend(
+    settings.REDIS_ENABLED, settings.REDIS_URL
+)
 
 
 def _decode(raw: str | bytes) -> Any:
@@ -58,25 +60,35 @@ class StateService:
         return redis_client
 
     async def purge_expired(self) -> None:
-        """Delete expired live games, at most once per PURGE_EVERY_SECONDS. Never raises."""
+        """Delete expired live games, at most once per PURGE_EVERY_SECONDS. Never
+        raises."""
         backend = self._backend()
         now = time.monotonic()
-        if not isinstance(backend, SqlStateBackend) or now - self._last_purge < PURGE_EVERY_SECONDS:
+        if (
+            not isinstance(backend, SqlStateBackend)
+            or now - self._last_purge < PURGE_EVERY_SECONDS
+        ):
             return
         self._last_purge = now
         try:
             purged = await anyio.to_thread.run_sync(backend.purge_expired_sync)
-        except Exception as exc:  # noqa: BLE001 — a failed sweep must not fail the caller
-            logger.warning("Could not purge expired live games (%s).", type(exc).__name__)
+        except Exception as exc:  # a failed sweep must not fail the caller
+            logger.warning(
+                "Could not purge expired live games (%s).", type(exc).__name__
+            )
             return
         if purged:
             logger.info("Purged %d expired live game rows.", purged)
 
     def lock(self, game_id: str) -> Any:
-        return self._backend().lock(f"lock:{_GAME}{game_id}", timeout=LOCK_TIMEOUT_SECONDS)
+        return self._backend().lock(
+            f"lock:{_GAME}{game_id}", timeout=LOCK_TIMEOUT_SECONDS
+        )
 
     def identity_lock(self, identity: str) -> Any:
-        return self._backend().lock(f"lock:{_ACTIVE}{identity}", timeout=LOCK_TIMEOUT_SECONDS)
+        return self._backend().lock(
+            f"lock:{_ACTIVE}{identity}", timeout=LOCK_TIMEOUT_SECONDS
+        )
 
     async def get_game(self, game_id: str) -> dict[str, Any] | None:
         key = f"{_GAME}{game_id}"
@@ -84,7 +96,10 @@ class StateService:
         if raw is None:
             return None
         document = _decode(raw)
-        if not isinstance(document, dict) or document.get("schema_version") != SCHEMA_VERSION:
+        if (
+            not isinstance(document, dict)
+            or document.get("schema_version") != SCHEMA_VERSION
+        ):
             await self._backend().delete(key)
             return None
         return document

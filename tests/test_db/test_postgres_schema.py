@@ -19,7 +19,8 @@ DDL = Path(__file__).resolve().parents[2] / "db" / "schema.postgres.sql"
 
 
 def normalize(dump: str) -> str:
-    """Same rule as `normalize()` in Novus/scripts/db/gen_ddl.py, which writes the file."""
+    """Same rule as `normalize()` in Novus/scripts/db/gen_ddl.py, which writes the
+    file."""
     keep = []
     for line in dump.splitlines():
         stripped = line.strip()
@@ -65,7 +66,8 @@ def test_every_timestamp_column_is_timestamptz(pg: PgDatabase) -> None:
     with pg.engine.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT table_name, column_name, data_type FROM information_schema.columns "
+                "SELECT table_name, column_name, data_type "
+                "FROM information_schema.columns "
                 "WHERE table_schema = current_schema() AND data_type LIKE 'timestamp%'"
             )
         ).all()

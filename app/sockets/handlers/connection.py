@@ -23,7 +23,9 @@ GUEST_ID_RE = re.compile(r"^guest_[0-9a-f-]{36}$")
 
 # Shown by the client's `connect_error`. Deliberately free of auth words: being
 # over the limit is no reason to sign in again.
-TOO_MANY_CONNECTIONS_MESSAGE = "Too many connections from your network. Try again in a minute."
+TOO_MANY_CONNECTIONS_MESSAGE = (
+    "Too many connections from your network. Try again in a minute."
+)
 
 
 def _new_guest_identity() -> str:
@@ -61,11 +63,15 @@ async def connect(sid: str, environ: dict, auth: Any = None) -> Any:
     # The per-address caps first: they are cheap, and token verification is not.
     if not await socket_manager.connect(sid, environ):
         raise socketio.exceptions.ConnectionRefusedError(TOO_MANY_CONNECTIONS_MESSAGE)
-    # Token verification is synchronous (and may fetch Google's keys): off the event loop.
+    # Token verification is synchronous (and may fetch Google's keys): off the event
+    # loop.
     identity = await anyio.to_thread.run_sync(resolve_identity, auth)
     if identity is None:
-        logger.warning("Rejecting handshake for sid %s: no identity, or the ID token failed.", sid)
-        await socket_manager.disconnect(sid)  # a refused connect gets no disconnect event
+        logger.warning(
+            "Rejecting handshake for sid %s: no identity, or the ID token failed.", sid
+        )
+        # A refused connect gets no disconnect event
+        await socket_manager.disconnect(sid)
         return False
     socket_manager.sid_to_identity[sid] = identity
     return None

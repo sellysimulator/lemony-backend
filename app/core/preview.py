@@ -6,7 +6,8 @@ and ``game`` is not modified. The figures are expected values built from the sam
 functions ``run_day`` uses:
 
     weight(type) = sum over hours of expected_spawn(...)
-    p(type, price) = apply_popularity(buy_probability(price, wtp(recipe quality)), popularity)
+    base(type, price) = buy_probability(price, wtp(recipe quality))
+    p(type, price) = apply_popularity(base(type, price), popularity)
     chance         = sum(weight * p) / sum(weight)
     expected_cups  = min(sum(weight * p), cups_possible)
     expected_margin = expected_cups * (price - cost_per_cup)
@@ -50,7 +51,8 @@ _EPS = 1e-9
 
 
 def _price_grid(low: float, high: float) -> list[float]:
-    """``round_cents(low + k * step)`` while <= high; the step widens past MAX_POINTS."""
+    """``round_cents(low + k * step)`` while <= high; the step widens past
+    MAX_POINTS."""
     span = max(0.0, high - low)
     multiple = 1
     while math.floor(span / (PRICE_STEP * multiple) + _EPS) + 1 > MAX_POINTS:
@@ -64,8 +66,8 @@ def _price_grid(low: float, high: float) -> list[float]:
 def _can_add(
     game: LemonadeGame, purchases: dict[str, dict[str, int]]
 ) -> dict[str, dict[str, bool]]:
-    """Per ingredient and pack size: whether the plan with one more of that pack still passes
-    the engine's purchase rules and fits the cash."""
+    """Per ingredient and pack size: whether the plan with one more of that pack still
+    passes the engine's purchase rules and fits the cash."""
     counts: dict[str, dict[int, int]] = {name: {} for name in INGREDIENT_NAMES}
     for name, packs in purchases.items():
         for size, count in packs.items():
@@ -74,7 +76,9 @@ def _can_add(
     for name in INGREDIENT_NAMES:
         out[name] = {}
         for pack in game.config.ingredients[name].packs:
-            more = {n: {str(s): c for s, c in sizes.items()} for n, sizes in counts.items()}
+            more = {
+                n: {str(s): c for s, c in sizes.items()} for n, sizes in counts.items()
+            }
             more[name][str(pack.size)] = counts[name].get(pack.size, 0) + 1
             try:
                 cost, _, _ = game.purchase_cost(more)
@@ -85,9 +89,11 @@ def _can_add(
     return out
 
 
-def plan_preview(game: LemonadeGame, plan: DayPlan, price: float | None = None) -> dict[str, Any]:
-    """Expected visitors, chance, cups and margin across the price grid, and the plan's own
-    figures. ``plan.price`` is ignored; ``price``, when given, is judged and priced.
+def plan_preview(
+    game: LemonadeGame, plan: DayPlan, price: float | None = None
+) -> dict[str, Any]:
+    """Expected visitors, chance, cups and margin across the price grid, and the plan's
+    own figures. ``plan.price`` is ignored; ``price``, when given, is judged and priced.
     Raises ``PlanError`` for a recipe or purchases ``run_day`` would refuse."""
     spend, units, lots = game.validate_purchases(plan)
     recipe = {name: int(plan.recipe[name]) for name in RECIPE_INGREDIENTS}
@@ -107,7 +113,9 @@ def plan_preview(game: LemonadeGame, plan: DayPlan, price: float | None = None) 
     total_weight = sum(weights)
     wtp = [
         willingness_to_pay(
-            person, recipe_quality(ingredient_scores(person, recipe)), config.quality_swing
+            person,
+            recipe_quality(ingredient_scores(person, recipe)),
+            config.quality_swing,
         )
         for person in game.people
     ]
@@ -152,7 +160,8 @@ Point = Callable[[float], tuple[float, float, float]]
 def _at_price(
     game: LemonadeGame, price: float, cost_per_cup: float | None, point: Point
 ) -> dict[str, Any]:
-    """The player's price judged as ``run_day`` judges it, and the curve at exactly it."""
+    """The player's price judged as ``run_day`` judges it, and the curve at exactly
+    it."""
     try:
         game.validate_price(price)
     except PlanError as exc:

@@ -46,7 +46,7 @@ def verify_firebase_id_token(token: str) -> dict | None:
 
     try:
         claims = firebase_auth.verify_id_token(token, app=app)
-    except Exception:  # noqa: BLE001 — any failure whatsoever means reject
+    except Exception:  # any failure whatsoever means reject
         return None
     return claims
 
@@ -87,7 +87,9 @@ def get_current_firebase_user(authorization: str = Header(default="")) -> dict:
     caller, so a deployment error does not look like a user's expired session.
     """
     if not _bearer_token(authorization):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_MISSING_TOKEN_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=_MISSING_TOKEN_DETAIL
+        )
 
     claims = _verified_claims(authorization)
     if claims is None:
@@ -96,5 +98,7 @@ def get_current_firebase_user(authorization: str = Header(default="")) -> dict:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=_UNCONFIGURED_DETAIL,
             )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_INVALID_TOKEN_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=_INVALID_TOKEN_DETAIL
+        )
     return claims

@@ -1,4 +1,5 @@
-"""Every number a player configures has a hard bound, and a non-finite one is refused."""
+"""Every number a player configures has a hard bound, and a non-finite one is
+refused."""
 
 import copy
 import json
@@ -194,7 +195,8 @@ def test_the_served_pack_limits_are_enforced():
     assert DayPlan(purchases={}, price=0.5, recipe=recipe)
 
 
-# The frontend's tests render with the served limits; their copy must be what the server sends.
+# The frontend's tests render with the served limits; their copy must be what the server
+# sends.
 FIXTURE = FilePath(__file__).parent.parent / "fixtures" / "limits.json"
 FRONTEND_COPY = (
     FilePath(__file__).parents[3]
@@ -211,7 +213,8 @@ def test_the_limits_fixture_is_what_the_server_serves():
 
 
 @pytest.mark.skipif(
-    not FRONTEND_COPY.exists(), reason="frontend repo not checked out next to the backend"
+    not FRONTEND_COPY.exists(),
+    reason="frontend repo not checked out next to the backend",
 )
 def test_the_limits_fixture_matches_the_frontend_copy():
     assert FRONTEND_COPY.read_bytes() == FIXTURE.read_bytes()

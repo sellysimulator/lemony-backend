@@ -75,26 +75,24 @@ class ConfigDefaultsResponse(BaseModel):
     weather_types: list[str]
     person_types: list[str]
     ingredient_names: list[str]
-    # Every bound the config and plan screens show or enforce: `core/limits.public_limits()`.
+    # Every bound the config and plan screens show or enforce:
+    # `core/limits.public_limits()`.
     limits: dict[str, dict[str, float] | float]
 
 
-class ConfigValidateResponse(BaseModel):
-    valid: bool
-    message: str | None = None
-
-
 class ConfigPreviewResponse(BaseModel):
-    """`POST /config/preview`: the verdict and every figure the config screen and help show.
+    """`POST /config/preview`: the verdict and every figure the config screen and help
+    show.
 
-    `ingredients` holds each ingredient's own figures (`core/config_preview.ingredient_preview`),
-    or null when that ingredient's settings are invalid, so the packs and spoilage keep
-    their figures while another part of the config is being fixed. `help` (the figures of
-    `config_preview.config_help`) needs the whole config to be valid, else it is null.
-    `customers_per_day` is the most customers one day can expect
-    (`demand.max_expected_customers`, capped at `limits.customers_per_day.max`). It is sent
-    whenever the config is valid apart from that cap, so with `valid: false` it means the
-    cap refused the config (`message` says so); it is null when anything else is invalid.
+    `ingredients` holds each ingredient's own figures
+    (`core/config_preview.ingredient_preview`), or null when that ingredient's settings
+    are invalid, so the packs and spoilage keep their figures while another part of the
+    config is being fixed. `help` (the figures of `config_preview.config_help`) needs
+    the whole config to be valid, else it is null. `customers_per_day` is the most
+    customers one day can expect (`demand.max_expected_customers`, capped at
+    `limits.customers_per_day.max`). It is sent whenever the config is valid apart from
+    that cap, so with `valid: false` it means the cap refused the config (`message` says
+    so); it is null when anything else is invalid.
     """
 
     valid: bool
@@ -102,18 +100,3 @@ class ConfigPreviewResponse(BaseModel):
     customers_per_day: int | None = None
     ingredients: dict[str, dict[str, Any] | None]
     help: dict[str, Any] | None = None
-
-
-class CupCostRequest(BaseModel):
-    """Day 1 of a game on `config`, with these packs bought and this recipe."""
-
-    config: dict[str, Any]
-    purchases: dict[str, dict[str, int]] = Field(default_factory=dict)
-    recipe: dict[str, int]
-
-
-class CupCostResponse(BaseModel):
-    spend: float
-    cups_possible: int
-    # The plan screen's cost per cup; null when not a single cup can be made.
-    cost_per_cup: float | None

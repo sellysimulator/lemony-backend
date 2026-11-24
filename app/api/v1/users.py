@@ -1,4 +1,5 @@
-"""User profile routes. No route takes a uid: the caller is always the verified token."""
+"""User profile routes. No route takes a uid: the caller is always the verified
+token."""
 
 import logging
 from typing import Annotated, Any
@@ -17,7 +18,11 @@ from ...schemas.user import (
     UserStatsResponse,
     UserUpsertRequest,
 )
-from ...services.db_service import find_game_by_public_id, game_row_summary, load_game_detail
+from ...services.db_service import (
+    find_game_by_public_id,
+    game_row_summary,
+    load_game_detail,
+)
 from ...services.stats_service import current_user_stats
 from ...services.user_service import UserService
 from ..deps import get_current_firebase_user
@@ -59,7 +64,7 @@ def upsert_user(
             email=_or_claim(payload.email, claims, "email"),
             photo_url=_or_claim(payload.photo_url, claims, "picture"),
         )
-    except Exception:  # noqa: BLE001 — logged, never returned
+    except Exception:  # logged, never returned
         raise _internal_error("Failed to upsert a user profile.") from None
     return UserResponse.model_validate(user)
 
@@ -71,7 +76,9 @@ def get_me(
 ) -> UserResponse:
     user = _user_service.get_by_firebase_uid(db, claims["uid"])
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found."
+        )
     return UserResponse.model_validate(user)
 
 
@@ -110,7 +117,9 @@ def list_my_games(
     user = _user_service.get_by_firebase_uid(db, claims["uid"])
     if user is None:
         return GameListResponse(items=[], total=0, page=page, page_size=page_size)
-    total = db.execute(select(func.count(Game.id)).where(Game.user_id == user.id)).scalar_one()
+    total = db.execute(
+        select(func.count(Game.id)).where(Game.user_id == user.id)
+    ).scalar_one()
     games = db.execute(
         select(Game)
         .where(Game.user_id == user.id)
@@ -137,5 +146,7 @@ def get_my_game(
     user = _user_service.get_by_firebase_uid(db, claims["uid"])
     game = find_game_by_public_id(db, public_id)
     if user is None or game is None or game.user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Game not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Game not found."
+        )
     return load_game_detail(db, game)

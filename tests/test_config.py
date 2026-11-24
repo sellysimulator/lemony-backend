@@ -66,10 +66,16 @@ def test_url_is_psycopg_with_the_postgres_defaults(monkeypatch):
 
 @pytest.mark.parametrize("password", ["p@ss:w/rd%41?#", "100%", "plain"])
 def test_credentials_are_percent_encoded(monkeypatch, password):
-    s = _pg_settings(monkeypatch, DB_USER="app@lemony", DB_PASSWORD=password, DB_HOST="db.x")
+    s = _pg_settings(
+        monkeypatch, DB_USER="app@lemony", DB_PASSWORD=password, DB_HOST="db.x"
+    )
     raw = s.db_url.split("://", 1)[1].rsplit("@", 1)[0]
     user, encoded = raw.split(":", 1)
-    assert "@" not in raw and unquote(user) == "app@lemony" and unquote(encoded) == password
+    assert (
+        "@" not in raw
+        and unquote(user) == "app@lemony"
+        and unquote(encoded) == password
+    )
     url = make_url(s.db_url)
     assert (url.username, url.password, url.host) == ("app@lemony", password, "db.x")
 
@@ -117,8 +123,12 @@ def test_a_postgres_override_gets_the_postgres_args(monkeypatch):
 
 @pytest.mark.parametrize("form", _CA_FORMS)
 @pytest.mark.parametrize("require", [True, False])
-def test_with_a_ca_the_server_is_verified_against_it(monkeypatch, tmp_path, form, require):
-    s = _pg_settings(monkeypatch, DB_SSL_CA=_ca_value(form, tmp_path), DB_REQUIRE_SSL=require)
+def test_with_a_ca_the_server_is_verified_against_it(
+    monkeypatch, tmp_path, form, require
+):
+    s = _pg_settings(
+        monkeypatch, DB_SSL_CA=_ca_value(form, tmp_path), DB_REQUIRE_SSL=require
+    )
     args = s.db_connect_args
     assert args["sslmode"] == "verify-full"
     assert args["options"] == "-c timezone=UTC"
@@ -156,7 +166,9 @@ def test_an_unloadable_ca_fails_loudly(monkeypatch, bad):
         (False, _TEST_CA_PEM, logging.INFO, "verified against DB_SSL_CA"),
     ],
 )
-def test_boot_log_says_how_the_db_link_is_protected(monkeypatch, caplog, require, ca, level, text):
+def test_boot_log_says_how_the_db_link_is_protected(
+    monkeypatch, caplog, require, ca, level, text
+):
     monkeypatch.setattr(db_tls_check.settings, "DB_URL_OVERRIDE", "")
     monkeypatch.setattr(db_tls_check.settings, "DB_REQUIRE_SSL", require)
     monkeypatch.setattr(db_tls_check.settings, "DB_SSL_CA", ca)

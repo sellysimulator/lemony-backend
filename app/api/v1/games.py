@@ -26,7 +26,9 @@ _NOT_FOUND_DETAIL = "Game not found."
 
 
 @router.get("/id/{public_id}/results")
-def get_game_results(public_id: str, db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
+def get_game_results(
+    public_id: str, db: Annotated[Session, Depends(get_db)]
+) -> dict[str, Any]:
     """A finished game's results, for anyone holding its public id: the link the end
     screen shares (`/results/:publicId`). No sign-in, no secret, no expiry.
 
@@ -41,7 +43,8 @@ def get_game_results(public_id: str, db: Annotated[Session, Depends(get_db)]) ->
     except Exception:
         logger.exception("Failed to load a game's results.")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=_INTERNAL_ERROR_DETAIL
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_INTERNAL_ERROR_DETAIL,
         ) from None
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND_DETAIL)
 
@@ -52,10 +55,12 @@ def claim_guest_games(
     db: Annotated[Session, Depends(get_db)],
     claims: Annotated[dict, Depends(get_current_firebase_user)],
 ) -> ClaimResponse:
-    """Reattribute the finished games of a guest id the caller holds (from its localStorage).
+    """Reattribute the finished games of a guest id the caller holds (from its
+    localStorage).
 
     The claim commits on its own; the stats are recomputed after it, in their own
-    transaction, so a stats failure never undoes the claim (reading the stats repairs them).
+    transaction, so a stats failure never undoes the claim (reading the stats repairs
+    them).
     """
     if not GUEST_ID_RE.match(payload.guest_identity):
         raise HTTPException(
@@ -66,7 +71,9 @@ def claim_guest_games(
         user_id = user.id
         result = db.execute(
             update(Game)
-            .where(Game.guest_identity == payload.guest_identity, Game.user_id.is_(None))
+            .where(
+                Game.guest_identity == payload.guest_identity, Game.user_id.is_(None)
+            )
             .values(user_id=user_id, guest_identity=None)
         )
         claimed = int(result.rowcount or 0)  # type: ignore[attr-defined]
@@ -74,7 +81,8 @@ def claim_guest_games(
     except Exception:
         logger.exception("Failed to claim guest games.")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=_INTERNAL_ERROR_DETAIL
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_INTERNAL_ERROR_DETAIL,
         ) from None
     if claimed:
         refresh_user_stats(user_id)

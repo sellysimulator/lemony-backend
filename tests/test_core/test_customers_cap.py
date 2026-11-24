@@ -1,9 +1,10 @@
-"""The cap on customers a day: the busiest day a config allows is refused over the limit.
+"""The cap on customers a day: the busiest day a config allows is refused over the
+limit.
 
-Every traffic limit is fine alone (spawn per hour, opening hours, weather multipliers), but
-together they made one day ~83,000 customers. ``demand.max_expected_customers`` is the
-figure the config is judged by and the config screen shows; it is checked here against a
-brute force over every day the engine can deal.
+Every traffic limit is fine alone (spawn per hour, opening hours, weather multipliers),
+but together they made one day ~83,000 customers. ``demand.max_expected_customers`` is
+the figure the config is judged by and the config screen shows; it is checked here
+against a brute force over every day the engine can deal.
 """
 
 from __future__ import annotations
@@ -27,7 +28,12 @@ from app.core.limits import (
     public_limits,
 )
 from app.core.people import build_people
-from app.core.weather import roll_day_weather, temperatures_by_weather, weather_odds, weathers_at
+from app.core.weather import (
+    roll_day_weather,
+    temperatures_by_weather,
+    weather_odds,
+    weathers_at,
+)
 
 PLAN = {"purchases": {}, "price": 0.5, "recipe": {"ice": 1, "sugar": 1, "lemons": 2}}
 
@@ -42,20 +48,24 @@ def crowd(spawn: float) -> dict[str, Any]:
 
 
 def every_limit() -> dict[str, Any]:
-    """Every traffic field at its own limit: the config that made an 83,000-customer day."""
+    """Every traffic field at its own limit: the config that made an 83,000-customer
+    day."""
     data = crowd(MAX_SPAWN_PER_HOUR)
     data["weather_multipliers"] = {w: MAX_WEATHER_MULTIPLIER for w in WEATHER_TYPES}
     return data
 
 
 def worst_day(config: GameConfig) -> float:
-    """The exact worst day, by brute force: every (weather, temperature) the roll can deal,
-    and the expected arrivals ``run_day`` draws for it, summed over types and hours."""
+    """The exact worst day, by brute force: every (weather, temperature) the roll can
+    deal, and the expected arrivals ``run_day`` draws for it, summed over types and
+    hours."""
     people = build_people(config)
     hours = range(config.min_max_values.hour.min, config.min_max_values.hour.max + 1)
     return max(
         sum(
-            expected_spawn(p, h, w, t, config.weather_multipliers[w]) for p in people for h in hours
+            expected_spawn(p, h, w, t, config.weather_multipliers[w])
+            for p in people
+            for h in hours
         )
         for w, temperatures in temperatures_by_weather(config).items()
         for t in temperatures
@@ -73,7 +83,9 @@ def random_config(seed: int) -> dict[str, Any]:
         prefs["preferred_hour"] = rng.randint(hours["min"], hours["max"])
         prefs["preferred_degrees"] = rng.randint(0, 80) / 2
         prefs["preferred_weather"] = rng.choice(WEATHER_TYPES)
-    data["weather_multipliers"] = {w: rng.uniform(0, MAX_WEATHER_MULTIPLIER) for w in WEATHER_TYPES}
+    data["weather_multipliers"] = {
+        w: rng.uniform(0, MAX_WEATHER_MULTIPLIER) for w in WEATHER_TYPES
+    }
     if rng.random() < 0.5:  # overlapping ranges, one weather never dealt
         data["weather_temperature_ranges"] = {
             "snowy": {"min": 50, "max": 60},
@@ -132,13 +144,18 @@ def test_temperatures_by_weather_are_the_days_the_roll_deals():
         assert bool(listed[w]) == (odds[w] > 0)
         assert all(w in weathers_at(config, t) for t in listed[w])
     for day in range(500):
-        weather, temperature = roll_day_weather(config, random.Random(f"x:{day}:weather"))
+        weather, temperature = roll_day_weather(
+            config, random.Random(f"x:{day}:weather")
+        )
         assert temperature in listed[weather]
 
 
 # --------------------------------------------------------------------- the cap
 def test_the_served_cap_is_the_constant():
-    assert public_limits()["customers_per_day"] == {"min": 0, "max": MAX_CUSTOMERS_PER_DAY}
+    assert public_limits()["customers_per_day"] == {
+        "min": 0,
+        "max": MAX_CUSTOMERS_PER_DAY,
+    }
     assert MAX_CUSTOMERS_PER_DAY == 5000
 
 
@@ -160,7 +177,11 @@ def test_a_config_just_under_the_cap_is_accepted_and_just_over_refused():
     message = str(refused.value)
     assert "Up to 5,001 customers could come on the busiest day" in message
     assert "over the limit of 5,000 a day" in message
-    for field in ("base visitors per hour", "opening hours", "weather traffic multipliers"):
+    for field in (
+        "base visitors per hour",
+        "opening hours",
+        "weather traffic multipliers",
+    ):
         assert field in message
 
 

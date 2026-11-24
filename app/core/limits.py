@@ -21,7 +21,8 @@ MIN_TEMPERATURE = -30  # °C, for the temperature range and every weather's rang
 MAX_TEMPERATURE = 60
 MAX_HOUR = 23
 MAX_PRICE = 100
-# A share from 0 to 1: the recipe effect on price, starting popularity, price tolerance below.
+# A share from 0 to 1: the recipe effect on price, starting popularity, price tolerance
+# below.
 MAX_SHARE = 1
 
 MAX_SPAWN_PER_HOUR = 200

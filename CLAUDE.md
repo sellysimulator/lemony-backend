@@ -116,8 +116,8 @@ else from the template needs the user's explicit OK.
   the cups the stock can make (held stock oldest first at the price paid, then today's
   packs dearest per unit first). The preview sends it, the day record keeps it (what the
   cups sold cost; with no sales, what the cups you could have made would have cost, or
-  null), and `POST /config/preview` gives the help its day-1 examples
-  (`POST /config/cup-cost` stays for older clients). The client computes none.
+  null), and `POST /config/preview` gives the help its day-1 examples.
+  The client computes none.
 - **`core/config_preview.py`** answers `POST /config/preview` (called, debounced, on every
   config edit): `ingredient_preview` (packs via `ingredients.pack_offers`, spoilage via
   `Ingredient.hazard`) needs only that ingredient's settings, so it is answered even
@@ -186,7 +186,7 @@ python3.11 -m venv venv && ./venv/bin/pip install -r requirements.txt -r require
 cp .env.example .env
 ./venv/bin/uvicorn app.main:application --reload --port 8080   # `application`, NOT `app`
 ./venv/bin/ruff check app tests
-./venv/bin/black --check app tests  # line length 100, matches ruff (pyproject)
+./venv/bin/black --check app tests  # line length 88, matches ruff (pyproject)
 ./venv/bin/mypy app tests           # default strictness
 ./venv/bin/pytest -q -m "not dbschema" --cov   # SQLite; coverage floor 75 (pyproject)
 ./venv/bin/pytest -q -m dbschema    # PostgreSQL 18 via Testcontainers (needs Docker)
@@ -247,6 +247,9 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
   `engine.view()` / `summary()` only.
 - **Ownership reads as absence.** Someone else's game returns "no such game", never a
   distinguishable error.
+- **`session_token` authorises nothing**; the identity does. It is kept as the family
+  shape: optional in `resume_game`, where a mismatch only drops the named game, and the
+  server then resumes the same identity's active one.
 - **Determinism.** Seed from `SystemRandom` at create; per-operation RNG is
   `random.Random(f"{seed}:{day}:{purpose}")`. No global `random`
   (`tests/test_core/test_no_global_random.py` scans `app/` for it). The order of RNG draws in
@@ -322,7 +325,10 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
   the schema checks in `tests/test_db/` (committed DDL, models = migrations, UTC sessions,
   every timestamp `timestamptz`), and every test taking the `db_sessions` fixture runs
   once on SQLite and once on PostgreSQL through the real service code (stored-game parity
-  in `test_persistence.py`, `live_games` in `test_live_games.py`).
+  in `test_persistence.py`, `live_games` in `test_live_games.py`). The two byte-identical
+  checks against `../Lemony_Frontend/src/__tests__/fixtures/` (`test_limits.py`,
+  `test_play.py`) are local-only: CI checks out this repo alone, so they skip there. Run
+  the suite with both repos side by side before shipping a fixture change.
 - **PostgreSQL rules.** Driver psycopg 3 (`postgresql+psycopg://`, credentials
   percent-encoded). `Settings.db_connect_args` sets `options=-c timezone=UTC` and
   `connect_timeout=10` (libpq: an unreachable server fails a new connection after 10 s; no
@@ -359,8 +365,9 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
 ## Deploy
 
 `render.yaml`: one Docker web service `lemony-backend`, health check `/api/v1/health`
-(`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `plan: free`,
-`REDIS_ENABLED=false`, CORS `https://lemonysim.web.app` + localhost. Migrations run at
+(`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `region:
+virginia`, `plan: free`, `REDIS_ENABLED=false`, `numInstances: 1`, CORS
+`https://lemonysim.web.app` and `https://lemonysim.firebaseapp.com`. Migrations run at
 container startup: the Dockerfile CMD is `alembic upgrade head && exec uvicorn …`, because
 free Render instances have no pre-deploy command. A failed migration exits non-zero, the new
 instance never becomes healthy and Render keeps the previous deploy live. Run one instance

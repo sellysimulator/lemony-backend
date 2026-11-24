@@ -33,9 +33,10 @@ _PRICE_NOISE = 1e-9
 def pack_offers(cfg: IngredientConfig) -> list[dict[str, Any]]:
     """Every pack on sale, smallest first, priced exactly as a purchase is.
 
-    ``price`` is ``IngredientConfig.pack_price``; ``unit_price`` what one unit of it costs;
-    ``saving`` what the discount takes off the list price; ``dearer_than`` the size of a
-    smaller pack that is cheaper per unit (the deepest discount among them), or None.
+    ``price`` is ``IngredientConfig.pack_price``; ``unit_price`` what one unit of it
+    costs; ``saving`` what the discount takes off the list price; ``dearer_than`` the
+    size of a smaller pack that is cheaper per unit (the deepest discount among them),
+    or None.
     """
     priced = [(pack, cfg.pack_price(pack)) for pack in cfg.packs]
     offers = []
@@ -64,7 +65,8 @@ def pack_offers(cfg: IngredientConfig) -> list[dict[str, Any]]:
 class Batch:
     qty: int
     age: int = 0
-    # Price paid per unit; None means "list price" (batches saved before pack discounts).
+    # Price paid per unit; None means "list price" (batches saved before pack
+    # discounts).
     unit_cost: float | None = None
 
 
@@ -88,7 +90,9 @@ class Ingredient:
 
     @classmethod
     def from_config(cls, name: str, cfg: IngredientConfig) -> Ingredient:
-        return cls(name, cfg.unit_cost, cfg.fresh_days, cfg.max_days, cfg.never_perishes)
+        return cls(
+            name, cfg.unit_cost, cfg.fresh_days, cfg.max_days, cfg.never_perishes
+        )
 
     def hazard(self, age: int) -> float:
         """Probability that a unit of this age perishes at tonight's check."""
@@ -99,7 +103,8 @@ class Ingredient:
         return (age - self.fresh_days) / (self.max_days - self.fresh_days)
 
     def survival(self, age: int) -> float:
-        """Expected share of a batch still good after ``age`` nightly checks, none of it sold."""
+        """Expected share of a batch still good after ``age`` nightly checks, none of it
+        sold."""
         alive = 1.0
         for night in range(1, age + 1):
             alive *= 1 - self.hazard(night)
@@ -116,7 +121,8 @@ class Ingredient:
             self.batches.append(Batch(qty=qty, age=0, unit_cost=unit_cost))
 
     def consume(self, qty: int) -> float:
-        """Remove ``qty`` units, oldest batch first; return what they cost. Caller checks ``total()`` first."""
+        """Remove ``qty`` units, oldest batch first; return what they cost. Caller
+        checks ``total()`` first."""
         if qty > self.total():
             raise ValueError(f"not enough {self.name}")
         remaining = qty
@@ -132,7 +138,8 @@ class Ingredient:
         return cost
 
     def end_of_day_perish(self, rng: random.Random) -> tuple[int, float]:
-        """Age every batch by a day, drop perished units, return (units lost, what they cost)."""
+        """Age every batch by a day, drop perished units, return (units lost, what they
+        cost)."""
         lost = 0
         value = 0.0
         for batch in self.batches:
@@ -157,7 +164,8 @@ class Ingredient:
     def to_dict(self) -> dict[str, Any]:
         return {
             "batches": [
-                {"qty": b.qty, "age": b.age, "unit_cost": self.paid(b)} for b in self.batches
+                {"qty": b.qty, "age": b.age, "unit_cost": self.paid(b)}
+                for b in self.batches
             ]
         }
 
@@ -178,7 +186,9 @@ class Ingredient:
         }
 
     @classmethod
-    def from_dict(cls, name: str, cfg: IngredientConfig, data: dict[str, Any]) -> Ingredient:
+    def from_dict(
+        cls, name: str, cfg: IngredientConfig, data: dict[str, Any]
+    ) -> Ingredient:
         ing = cls.from_config(name, cfg)
         ing.batches = [
             Batch(

@@ -75,8 +75,8 @@ def _truncate_all(engine: Engine) -> None:
             conn.execute(
                 text(
                     "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' "
-                    "AND table_name <> 'alembic_version'"
+                    "WHERE table_schema = current_schema() "
+                    "AND table_type = 'BASE TABLE' AND table_name <> 'alembic_version'"
                 )
             )
             .scalars()
