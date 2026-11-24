@@ -80,7 +80,11 @@ class Settings(BaseSettings):
     GAME_TTL_SECONDS: int = 7 * 24 * 3600
     MAX_DISPLAY_NAME_LENGTH: int = 24
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
+    # `ENV_FILE` names the dotenv file (default `.env`); empty reads none. The test
+    # suite sets it empty, so it never reads a developer's file.
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE", ".env") or None, case_sensitive=True, extra="ignore"
+    )
 
     @field_validator("CORS_ORIGINS")
     @classmethod
@@ -116,17 +120,19 @@ class Settings(BaseSettings):
 
     @property
     def db_connect_args(self) -> dict[str, Any]:
-        """psycopg connect args: UTC sessions, and TLS unless ``DB_REQUIRE_SSL`` is false.
+        """psycopg connect args: UTC sessions, a connect timeout, and TLS unless
+        ``DB_REQUIRE_SSL`` is false.
 
         ``options=-c timezone=UTC`` makes every session hand timestamps back in
-        UTC. With ``DB_SSL_CA`` the server certificate and host name are verified
+        UTC. ``connect_timeout`` (libpq, seconds) makes a new connection to an
+        unreachable server fail after 10 s instead of hanging. With ``DB_SSL_CA`` the server certificate and host name are verified
         (``sslmode=verify-full``); without it the link is encrypted but the server
         is not authenticated (``sslmode=require``). Any other URL (the suite's
         SQLite) gets no args.
         """
         if not self.is_postgres:
             return {}
-        args: dict[str, Any] = {"options": "-c timezone=UTC"}
+        args: dict[str, Any] = {"options": "-c timezone=UTC", "connect_timeout": 10}
         if self.DB_SSL_CA.strip():
             args |= {"sslmode": "verify-full", "sslrootcert": _ca_file(self.DB_SSL_CA)}
         elif self.DB_REQUIRE_SSL:

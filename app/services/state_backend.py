@@ -46,16 +46,20 @@ class StateBackend(Protocol):
 class _ProcessLock:
     """An `asyncio.Lock` wearing `redis.asyncio.Lock`'s context-manager shape.
 
-    `timeout` is accepted and ignored: within one event loop an owner cannot
-    die mid-operation without unwinding through `__aexit__`.
+    Waiting for it gives up after `timeout` seconds with `TimeoutError`, so a
+    request stuck behind a slow or hung holder fails (the handler's generic
+    `SERVER_ERROR`) instead of queueing forever. A holder is never cut short:
+    within one event loop an owner cannot die mid-operation without unwinding
+    through `__aexit__`.
     """
 
-    def __init__(self, lock: asyncio.Lock, timeout: int) -> None:
+    def __init__(self, lock: asyncio.Lock, timeout: float) -> None:
         self._lock = lock
         self.timeout = timeout
 
     async def __aenter__(self) -> Self:
-        await self._lock.acquire()
+        async with asyncio.timeout(self.timeout):
+            await self._lock.acquire()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -153,7 +157,7 @@ class SqlStateBackend:
     async def exists(self, key: str) -> int:
         return 1 if await self.get(key) is not None else 0
 
-    def lock(self, key: str, timeout: int = 10) -> _ProcessLock:
+    def lock(self, key: str, timeout: float = 10) -> _ProcessLock:
         lock = self._locks.get(key)
         if lock is None:
             lock = asyncio.Lock()

@@ -33,11 +33,14 @@ def _new_guest_identity() -> str:
 def resolve_identity(auth: dict | None) -> str | None:
     """The identity for a handshake payload, or None to reject it.
 
-    None means an ID token was presented and did not verify. That is never a
-    reason to fall back to an accompanying guest id.
+    None means an ID token was presented and did not verify, or no identity was
+    presented at all (no ID token and no guest id). A failed token is never a
+    reason to fall back to an accompanying guest id, and a signed-in client whose
+    token could not be fetched sends neither rather than its guest id: refusing
+    it, instead of minting a guest, keeps it from silently playing as a stranger.
     """
-    if not isinstance(auth, dict):
-        return _new_guest_identity()
+    if not isinstance(auth, dict) or not (auth.get("idToken") or auth.get("guestId")):
+        return None
     id_token = auth.get("idToken")
     if id_token:
         claims = verify_firebase_id_token(id_token)
@@ -61,7 +64,7 @@ async def connect(sid: str, environ: dict, auth: Any = None) -> Any:
     # Token verification is synchronous (and may fetch Google's keys): off the event loop.
     identity = await anyio.to_thread.run_sync(resolve_identity, auth)
     if identity is None:
-        logger.warning("Rejecting handshake for sid %s: the ID token failed.", sid)
+        logger.warning("Rejecting handshake for sid %s: no identity, or the ID token failed.", sid)
         await socket_manager.disconnect(sid)  # a refused connect gets no disconnect event
         return False
     socket_manager.sid_to_identity[sid] = identity

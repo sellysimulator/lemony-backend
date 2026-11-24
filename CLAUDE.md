@@ -153,7 +153,9 @@ else from the template needs the user's explicit OK.
   locks `lock:game:<id>` / `lock:active:<identity>`, TTL `GAME_TTL_SECONDS` (a guest's: at most
   `GUEST_GAME_TTL_SECONDS`, 2 days). Expired `live_games` rows go when read, at startup, and
   in a sweep `create_game` triggers at most every `PURGE_EVERY_SECONDS` (10 min). Process locks
-  are weakly held (gone once released), and a client `game_id` that is not 32 lowercase hex
+  are weakly held (gone once released), and waiting for one gives up after
+  `LOCK_TIMEOUT_SECONDS` (10 s) with `TimeoutError`, which `guarded()` answers as
+  `SERVER_ERROR` (with Redis the same `timeout` is the lock's expiry instead), and a client `game_id` that is not 32 lowercase hex
   is refused as `NO_GAME` (`game_service.checked_game_id`) before any lock is taken
   (`require_owned`, which `preview_plan` uses, checks it before the store is read).
   **Lock order is identity → game**: `create_game` takes the old active game's lock inside
@@ -227,15 +229,19 @@ crashes until it is reloaded.
 **Rounding rule:** only the server rounds money (`core/money.py` `round_cents`: trim
 `value*100` to 12 significant digits, round half away from zero, `/100`, normalise `-0`).
 Every money figure it sends is already rounded; the client's `money()` only prints two
-decimals.
+decimals. Every other quantity rounded to a step (a Poisson count, a temperature to 0.5 °C,
+a help example's units) uses `money.half_up` (halves up); never Python's `round()` (halves
+to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float noise.
 
 ## Invariants
 
 - **Identity is server-only.** Resolved once at `connect` from `auth.idToken` (verified via
   the single path `api/deps.verify_firebase_id_token`) or `auth.guestId`
-  (`^guest_<uuid>$`), else a fresh server-minted guest id. Read afterwards from
-  `socket_manager.sid_to_identity[sid]`, never from a payload. A bad `idToken` refuses the
-  connection; it never falls back to the guest id.
+  (`^guest_<uuid>$`; a malformed one gets a fresh server-minted guest id). Read afterwards
+  from `socket_manager.sid_to_identity[sid]`, never from a payload. A bad `idToken` refuses
+  the connection; it never falls back to the guest id. A handshake with neither (no
+  `auth`, or `{idToken: null, guestId: null}`, what a signed-in client sends when it could
+  not fetch its token) is refused too, never handed a fresh guest: the client retries.
 - **Never send** `identity`, the engine seed / raw engine payload, or `session_token`
   (except the single `game_created` emit to the creating sid). Clients get
   `engine.view()` / `summary()` only.
@@ -253,8 +259,15 @@ decimals.
   `weather.roll_day_weather` is `day_temperature` + `weathers_at` with the same two draws.
 - **Idempotency.** Every outbound event carries a per-game monotonic `seq` (the client drops
   stale ones), except `plan_preview`, a request-scoped reply matched by `request_id`. `submit_day` replays return the stored record with `duplicate=True` (and `events: None`);
-  `persist_if_finished` is safe to repeat; `resume_game` and `retry_persist` retry it, and
-  a failure is reported as `game_persist_failed`. `create_game` never abandons a finished,
+  `persist_if_finished` is safe to repeat; a failure is reported as `game_persist_failed`
+  and retried in the background (`game.py` `PERSIST_RETRY_DELAYS` = 2, 10, 30 s, one task
+  per game in `_persist_retries`, no lock held while it sleeps or writes; it answers the sid
+  that last asked, in `_persist_sids`). A game is in `_persisting` from before its first
+  write until its last retry is done, and leaves it before the final answer (so a rejoin
+  during that answer saves again, and a failing hand retry then gets background retries);
+  `retry_persist` retries at once, and `resume_game` / `request_state` do only when no save
+  is in flight. Tests run with no background
+  retries (autouse `no_background_saves`); `test_save.py` gates them with `retry_gate`. `create_game` never abandons a finished,
   unsaved game: it retries the save and refuses with `UNSAVED_GAME` while it fails.
 - **Game formulas belong to the user.** Keep existing formulas; if one looks wrong, flag it
   as an explicit before/after proposal rather than rewriting it inside another change.
@@ -300,7 +313,9 @@ decimals.
 - **Never hardcode Socket.IO `logger`/`engineio_logger` to `True`** — tied to `DEBUG`;
   engine.io logs full packets. Never log tokens, guest ids, uids or the service account.
 - **Tests** use a temp SQLite DB via `DB_URL_OVERRIDE` set in `tests/conftest.py` before
-  `app` is imported; tables are recreated per test; no Redis, `.env` never read.
+  `app` is imported; tables are recreated per test; no Redis. `.env` is never read: the
+  same block sets `ENV_FILE` empty, and `Settings` (`app/config.py`) takes its dotenv file
+  from `ENV_FILE` (default `.env`; empty reads none), so a developer's file can't leak in.
   `asyncio_mode = strict` → every async test needs `@pytest.mark.asyncio`. A change to the
   Redis backend needs a manual smoke test against a real Redis. Tests marked `dbschema`
   run on a Testcontainers `postgres:18` migrated to head (`tests/fixtures/postgres.py`):
@@ -309,8 +324,9 @@ decimals.
   once on SQLite and once on PostgreSQL through the real service code (stored-game parity
   in `test_persistence.py`, `live_games` in `test_live_games.py`).
 - **PostgreSQL rules.** Driver psycopg 3 (`postgresql+psycopg://`, credentials
-  percent-encoded). `Settings.db_connect_args` sets `options=-c timezone=UTC` on every
-  connection, and TLS: `sslmode=verify-full` against `DB_SSL_CA` (PEM text is written to
+  percent-encoded). `Settings.db_connect_args` sets `options=-c timezone=UTC` and
+  `connect_timeout=10` (libpq: an unreachable server fails a new connection after 10 s; no
+  `statement_timeout`) on every connection, and TLS: `sslmode=verify-full` against `DB_SSL_CA` (PEM text is written to
   a temp file for `sslrootcert`), else `sslmode=require` unless `DB_REQUIRE_SSL=false`;
   any non-PostgreSQL URL (the suite's SQLite) gets no args. Every timestamp column is
   `DateTime(timezone=True)` (`timestamptz`), written as aware UTC, and every API field or
@@ -387,6 +403,11 @@ during a deploy, so everyday development uses a local Docker PostgreSQL 18
 change (they are not in `render.yaml`, so the defaults apply). With Redis off `live_games`
 is the pool's busiest user: every store operation opens a session in a worker thread and
 closes it before returning, so no connection is held across an `await` or a lock wait.
+
+**Deploy order for the handoff-hardening release: backend before frontend.** The new
+backend accepts the old frontend's signed-in and guest handshakes, while the new frontend
+relies on the backend refusing a handshake with no identity (`{idToken: null, guestId:
+null}`) so that it retries.
 
 `autoDeployTrigger: checksPass` makes `.github/workflows/ci.yml` the deploy gate: a push
 to `main` deploys only once CI passes. Don't add a deploy job or deploy hook to CI (it

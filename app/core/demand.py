@@ -50,6 +50,7 @@ import statistics
 from functools import partial
 
 from .config_model import GameConfig
+from .money import half_up
 from .people import PersonType, build_people
 from .weather import temperatures_by_weather
 
@@ -117,11 +118,11 @@ def max_expected_customers(config: GameConfig) -> int:
 
 
 def poisson(rng: random.Random, lam: float) -> int:
-    """Poisson sample: Knuth for small means, rounded normal approximation above 30."""
+    """Poisson sample: Knuth for small means, normal approximation above 30 (halves up)."""
     if lam <= 0:
         return 0
     if lam > 30:
-        return max(0, round(rng.gauss(lam, math.sqrt(lam))))
+        return max(0, half_up(rng.gauss(lam, math.sqrt(lam))))
     threshold = math.exp(-lam)
     k, p = 0, 1.0
     while True:

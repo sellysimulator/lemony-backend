@@ -1,13 +1,20 @@
-"""The one money rounding rule, and the pack prices it gives.
+"""The rounding rules: money and the pack prices it gives, and every other game quantity.
 
 Only the server rounds money: every figure it sends is already rounded, and the client
 just prints it. Halves go away from zero after float noise is trimmed to 12 digits.
+Every other quantity rounded to a step (a customer count, a temperature) rounds halves
+up, never to even as Python's `round()` does.
 """
+
+import random
 
 import pytest
 
-from app.core.config_model import IngredientConfig
-from app.core.money import round_cents
+from app.core import demand
+from app.core.config_model import GameConfig, IngredientConfig
+from app.core.defaults import default_config
+from app.core.money import half_up, round_cents
+from app.core.weather import day_temperature
 
 ROUND_CENTS = [
     (0.125, 0.13),
@@ -60,3 +67,24 @@ def test_pack_price(size, unit_cost, discount, expected):
         max_days=1,
     )
     assert ing.pack_price(ing.packs[0]) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [(0.5, 1), (1.5, 2), (2.5, 3), (30.5, 31), (2.4999, 2), (-2.5, -2), (-2.6, -3), (0.0, 0)],
+)
+def test_half_up(value, expected):
+    assert half_up(value) == expected
+
+
+def test_a_poisson_count_on_a_half_rounds_up(monkeypatch):
+    rng = random.Random(1)
+    monkeypatch.setattr(rng, "gauss", lambda mu, sigma: 40.5)
+    assert demand.poisson(rng, 40.0) == 41  # round() gives 40, the even neighbour
+
+
+def test_a_temperature_on_a_half_step_rounds_up():
+    config = GameConfig.model_validate(default_config())
+    # 20.25 is halfway between 20.0 and 20.5: round() gives 20.0, the even multiple.
+    assert day_temperature(config, 20.25) == 20.5
+    assert day_temperature(config, 20.75) == 21.0

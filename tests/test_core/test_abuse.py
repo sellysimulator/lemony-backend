@@ -180,3 +180,13 @@ async def test_middleware_replays_the_body_then_hands_over_receive() -> None:
     }
     await abuse.AbuseLimitMiddleware(inner)(scope, receive, no_send)
     assert [m["type"] for m in seen] == ["http.request"] + ["http.disconnect"] * 2
+
+
+def test_per_address_caps_fit_a_whole_school_behind_one_address() -> None:
+    """A school shares one NAT address: the per-address caps are sized for it, and the
+    per-sid limits (`EVENT_LIMIT`, `PREVIEW_LIMIT`) stay the guard against one client."""
+    assert abuse.MAX_SOCKETS_PER_IP >= 400
+    assert abuse.CONNECT_LIMIT >= 300 and abuse.CONNECT_WINDOW == 60.0
+    assert abuse.REST_LIMIT >= 3000 and abuse.REST_WINDOW == 60.0
+    assert abuse.HEAVY_LIMIT >= 600 and abuse.HEAVY_WINDOW == 60.0
+    assert (abuse.EVENT_LIMIT, abuse.PREVIEW_LIMIT) == (20, 5)

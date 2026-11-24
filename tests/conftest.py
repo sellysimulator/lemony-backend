@@ -1,8 +1,9 @@
 """Shared fixtures.
 
 The environment is overridden before `app` is imported, so a developer's `.env`
-(which may point at a real database) is never touched: the suite runs on a
-throwaway SQLite file, with Firebase unconfigured. Tests marked `dbschema` also
+(which may point at a real database) is never read: `ENV_FILE` is empty, so
+`Settings` loads no dotenv file, and the suite runs on a throwaway SQLite file,
+with Firebase unconfigured. Tests marked `dbschema` also
 run on a throwaway PostgreSQL (`tests/fixtures/postgres.py`, needs Docker).
 """
 
@@ -19,6 +20,9 @@ import pytest
 _DB_FILE = Path(tempfile.mkdtemp(prefix="lemony-test-")) / "test.db"
 os.environ.update(
     {
+        # No dotenv file at all (`app/config.py`): only the values here and the
+        # declared defaults count.
+        "ENV_FILE": "",
         "DB_URL_OVERRIDE": f"sqlite:///{_DB_FILE}",
         "REDIS_ENABLED": "False",
         "REDIS_URL": "",
@@ -49,6 +53,16 @@ def fresh_limits():
     abuse.reset()
     socket_manager.sid_to_ip.clear()
     socket_manager.sockets_per_ip.clear()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def no_background_saves(monkeypatch):
+    """A failed save starts no background retry unless a test sets the delays itself
+    (`tests/test_services/test_save.py`), so no task outlives its test's event loop."""
+    from app.sockets.handlers import game
+
+    monkeypatch.setattr(game, "PERSIST_RETRY_DELAYS", ())
     yield
 
 
