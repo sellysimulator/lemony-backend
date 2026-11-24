@@ -11,6 +11,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
+    region: virginia
     plan: free
     numInstances: 1  # the game locks and rate limits live in this process
     healthCheckPath: /api/v1/health

@@ -2,8 +2,9 @@
 
 Every read-modify-write runs under the game's lock. Identity is the one
 authority: a document is only ever touched by the identity that created it
-(compared with `hmac.compare_digest`), and a presented `session_token` must
-match too. Handlers never see engine internals — they get the public state.
+(compared with `hmac.compare_digest`). `session_token` authorises nothing: only
+`resume_game` reads it, and only to pick which of the identity's own games to resume
+(`load_owned`). Handlers never see engine internals — they get the public state.
 
 Game document:
     schema_version, game_id, identity, session_token, engine (payload),
@@ -182,7 +183,9 @@ async def load_owned(
     """The identity's game (by id, or its active game), or None.
 
     A game owned by someone else reads as "no such game" — its existence is not
-    disclosed. A presented session_token that does not match is refused the same way.
+    disclosed. A session_token that does not match the named game reads as absent too,
+    but that keeps no one out: the token is optional, and `resume_game` then falls back
+    to the active game of this same identity.
     """
     if not game_id:
         game_id = await state_svc.get_active_game_id(identity)

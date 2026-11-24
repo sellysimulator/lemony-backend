@@ -76,6 +76,8 @@ A day's customers (`day_result.events`, one per visitor with its outcome, reason
 
 Abuse limits (`app/core/abuse.py`, per client address unless noted): more than 20 events a second from one socket are dropped unanswered, and so are its `preview_plan` requests past 5 a second; more than 60 `create_game` a minute get `error {code: "RATE_LIMITED", message}`; a handshake is refused (`connect_error`) past 400 open sockets or 300 connects a minute. A socket message may be at most 64 KB. REST answers 429 `{detail}` with `Retry-After: 60` past 3,000 requests a minute, or 600 a minute to `/config/preview`, `/health/deep` and `/games/id/{public_id}/results`, and 413 to a body over 64 KB (chunked bodies are counted too). The first request from each IP source logs `client ip source: …` (no IP) so the deployment's header can be checked in Render's logs. The per-address caps are sized for a whole school behind one NAT address; the per-socket limits are the guard against one misbehaving client.
 
+A game belongs to the identity verified at the handshake, and that identity alone authorises every event. `session_token` authorises nothing: `resume_game` may send it back, and a token that does not match the game it names (like an unknown `game_id`) just makes the server resume that identity's active game instead.
+
 `game_state` is `{seq, full, state}`. Only a full state (after `create_game`, `resume_game` and `request_state`) carries the history: `days` and, once finished, `summary`. The state after `ack_day` and the one inside `day_result` are daily and leave the history out, so the client appends `day_result.record` to the days it holds. The full contract is in the `app/sockets/handlers/game.py` docstring.
 
 ## Game rules

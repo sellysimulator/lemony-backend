@@ -30,7 +30,9 @@ request-scoped reply that is not a state event. A game deleted while a request w
 being answered (abandoned, or replaced by a new game, from another tab) gets no more
 events: `bump_seq` returns None (and never saves it back) and the handler stops there.
 So a game abandoned between its last day and `game_finished` is not saved either.
-`session_token` is sent in exactly one event, `game_created`, to the creating sid.
+`session_token` is sent in exactly one event, `game_created`, to the creating sid. It
+authorises nothing (the handshake identity does): `resume_game` may send it back, and
+when it does not match the game it names, the identity's active game is resumed instead.
 
 `plan_preview` carries every figure the plan screen shows (see `core/preview.py`): the
 spend, the cash after it, the units bought, which packs can still be added (`can_add`,

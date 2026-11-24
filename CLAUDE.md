@@ -247,6 +247,9 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
   `engine.view()` / `summary()` only.
 - **Ownership reads as absence.** Someone else's game returns "no such game", never a
   distinguishable error.
+- **`session_token` authorises nothing**; the identity does. It is kept as the family
+  shape: optional in `resume_game`, where a mismatch only drops the named game, and the
+  server then resumes the same identity's active one.
 - **Determinism.** Seed from `SystemRandom` at create; per-operation RNG is
   `random.Random(f"{seed}:{day}:{purpose}")`. No global `random`
   (`tests/test_core/test_no_global_random.py` scans `app/` for it). The order of RNG draws in
@@ -362,9 +365,10 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
 ## Deploy
 
 `render.yaml`: one Docker web service `lemony-backend`, health check `/api/v1/health`
-(`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `plan: free`,
-`REDIS_ENABLED=false`, `numInstances: 1`, CORS `https://lemonysim.web.app` and
-`https://lemonysim.firebaseapp.com`. Migrations run at container startup: the Dockerfile CMD is `alembic upgrade head && exec uvicorn …`, because
+(`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `region:
+virginia`, `plan: free`, `REDIS_ENABLED=false`, `numInstances: 1`, CORS
+`https://lemonysim.web.app` and `https://lemonysim.firebaseapp.com`. Migrations run at
+container startup: the Dockerfile CMD is `alembic upgrade head && exec uvicorn …`, because
 free Render instances have no pre-deploy command. A failed migration exits non-zero, the new
 instance never becomes healthy and Render keeps the previous deploy live. Run one instance
 only (Alembic must not race itself), and never `create_all()` at startup. The database is
