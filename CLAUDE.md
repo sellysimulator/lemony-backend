@@ -322,7 +322,10 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
   the schema checks in `tests/test_db/` (committed DDL, models = migrations, UTC sessions,
   every timestamp `timestamptz`), and every test taking the `db_sessions` fixture runs
   once on SQLite and once on PostgreSQL through the real service code (stored-game parity
-  in `test_persistence.py`, `live_games` in `test_live_games.py`).
+  in `test_persistence.py`, `live_games` in `test_live_games.py`). The two byte-identical
+  checks against `../Lemony_Frontend/src/__tests__/fixtures/` (`test_limits.py`,
+  `test_play.py`) are local-only: CI checks out this repo alone, so they skip there. Run
+  the suite with both repos side by side before shipping a fixture change.
 - **PostgreSQL rules.** Driver psycopg 3 (`postgresql+psycopg://`, credentials
   percent-encoded). `Settings.db_connect_args` sets `options=-c timezone=UTC` and
   `connect_timeout=10` (libpq: an unreachable server fails a new connection after 10 s; no
@@ -360,8 +363,8 @@ to even) for a game quantity. `round(x, n)` stays only to trim a ratio or float 
 
 `render.yaml`: one Docker web service `lemony-backend`, health check `/api/v1/health`
 (`/health/deep` for DB/Redis readiness, always HTTP 200, answer reused for 15 s), `plan: free`,
-`REDIS_ENABLED=false`, CORS `https://lemonysim.web.app` + localhost. Migrations run at
-container startup: the Dockerfile CMD is `alembic upgrade head && exec uvicorn …`, because
+`REDIS_ENABLED=false`, `numInstances: 1`, CORS `https://lemonysim.web.app` and
+`https://lemonysim.firebaseapp.com`. Migrations run at container startup: the Dockerfile CMD is `alembic upgrade head && exec uvicorn …`, because
 free Render instances have no pre-deploy command. A failed migration exits non-zero, the new
 instance never becomes healthy and Render keeps the previous deploy live. Run one instance
 only (Alembic must not race itself), and never `create_all()` at startup. The database is
