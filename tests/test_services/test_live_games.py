@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.live_game import LiveGame
@@ -20,6 +21,11 @@ NOW = datetime(2026, 11, 18, 14, 0, 0, tzinfo=UTC)
 def frozen(monkeypatch: pytest.MonkeyPatch) -> datetime:
     monkeypatch.setattr(state_backend, "_utcnow", lambda: NOW)
     return NOW
+
+
+def _keys(sessions: Callable[[], Session]) -> set[str]:
+    with sessions() as db:
+        return set(db.execute(select(LiveGame.state_key)).scalars())
 
 
 def _expire_at(sessions: Callable[[], Session], key: str, when: datetime | None) -> None:
@@ -58,12 +64,12 @@ def test_expiry_boundary_second(db_sessions: Callable[[], Session], frozen: date
     _expire_at(db_sessions, "game:alive", frozen + timedelta(seconds=1))
 
     assert backend.purge_expired_sync() == 1
-    assert set(backend.keys_sync()) == {"game:alive", "game:forever"}
+    assert _keys(db_sessions) == {"game:alive", "game:forever"}
     assert backend._get_sync("game:alive") == "v"
 
     _expire_at(db_sessions, "game:alive", frozen)
     assert backend._get_sync("game:alive") is None  # expired on read, and deleted
-    assert backend.keys_sync() == ["game:forever"]
+    assert _keys(db_sessions) == {"game:forever"}
 
 
 def test_keys_are_case_sensitive_and_take_long_identities(

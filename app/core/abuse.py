@@ -40,8 +40,6 @@ HEAVY_WINDOW = 60.0
 HEAVY_PATHS = frozenset(
     {
         "/api/v1/config/preview",
-        "/api/v1/config/validate",
-        "/api/v1/config/cup-cost",
         "/api/v1/health/deep",
     }
 )

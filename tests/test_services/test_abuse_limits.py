@@ -29,7 +29,7 @@ def test_a_heavy_route_answers_429_past_its_limit(monkeypatch: pytest.MonkeyPatc
     client = TestClient(app)
     origin = settings.CORS_ORIGINS[0]
     sent = {"X-Forwarded-For": "6.6.6.6, 1.1.1.1", "Origin": origin}
-    codes = [client.post("/api/v1/config/validate", json={}, headers=sent) for _ in range(3)]
+    codes = [client.post("/api/v1/config/preview", json={}, headers=sent) for _ in range(3)]
     assert [r.status_code for r in codes] == [200, 200, 429]
     refused = codes[-1]
     assert refused.json() == {"detail": abuse.RATE_LIMITED_MESSAGE}
@@ -38,7 +38,7 @@ def test_a_heavy_route_answers_429_past_its_limit(monkeypatch: pytest.MonkeyPatc
     assert "retry-after" in refused.headers["access-control-expose-headers"].lower()
     # a forged leftmost entry changes nothing; another real address is counted apart
     other = {"X-Forwarded-For": "1.1.1.1, 2.2.2.2"}
-    assert client.post("/api/v1/config/validate", json={}, headers=other).status_code == 200
+    assert client.post("/api/v1/config/preview", json={}, headers=other).status_code == 200
     # light routes only count against the general limit
     assert client.get("/api/v1/health", headers=sent).status_code == 200
 
@@ -54,7 +54,7 @@ def test_an_oversized_body_is_refused_unread() -> None:
     client = TestClient(app)
     body = b"{" + b" " * abuse.MAX_BODY_BYTES + b"}"
     res = client.post(
-        "/api/v1/config/validate", content=body, headers={"Content-Type": "application/json"}
+        "/api/v1/config/preview", content=body, headers={"Content-Type": "application/json"}
     )
     assert res.status_code == 413 and res.json() == {"detail": abuse.TOO_LARGE_MESSAGE}
 

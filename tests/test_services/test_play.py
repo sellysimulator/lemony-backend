@@ -13,6 +13,7 @@ from app.core.limits import MAX_CUSTOMERS_PER_DAY, public_limits
 from app.main import app
 from app.models.live_game import LiveGame
 from app.services import state_service
+from app.services.game_service import GameError, parse_config
 from app.services.state_backend import SqlStateBackend
 from app.sockets.handlers import connection, game
 from app.sockets.manager import socket_manager
@@ -54,7 +55,7 @@ async def test_sql_backend_roundtrip_and_expiry():
     backend = SqlStateBackend()
     await backend.setex("k", 60, "v1")
     await backend.setex("k", 60, "v2")
-    assert await backend.get("k") == "v2" and await backend.exists("k") == 1
+    assert await backend.get("k") == "v2"
     with SessionLocal() as db:
         expired = datetime(2000, 1, 1, tzinfo=UTC)
         db.get(LiveGame, "k").expires_at = expired
@@ -300,12 +301,10 @@ def test_config_routes():
     assert defaults["limits"] == public_limits() and "max_num_days" not in defaults
     assert defaults["limits"]["num_days"] == {"min": 1, "max": 30}
     assert defaults["limits"]["packs_per_size"] == {"min": 0, "max": 100}
-    assert client.post("/api/v1/config/validate", json=defaults["config"]).json() == {
-        "valid": True,
-        "message": None,
-    }
+    res = client.post("/api/v1/config/preview", json=defaults["config"]).json()
+    assert res["valid"] is True and res["message"] is None
     defaults["config"]["weather_temperature_ranges"]["rainy"]["min"] = 8
-    res = client.post("/api/v1/config/validate", json=defaults["config"]).json()
+    res = client.post("/api/v1/config/preview", json=defaults["config"]).json()
     assert not res["valid"] and "gap" in res["message"]
     assert client.get("/api/v1/health").json() == {"status": "ok"}
 
@@ -329,8 +328,9 @@ def test_an_invalid_config_keeps_each_valid_ingredients_figures_and_no_help():
     data["weather_temperature_ranges"]["rainy"]["min"] = 8  # a gap
     data["ingredients"]["sugar"]["fresh_days"] = 20  # not under its max days
     res = client.post("/api/v1/config/preview", json=data).json()
-    verdict = client.post("/api/v1/config/validate", json=data).json()
-    assert res["valid"] is False and res["message"] == verdict["message"]
+    with pytest.raises(GameError) as refused:  # what `create_game` would say
+        parse_config(data)
+    assert res["valid"] is False and res["message"] == refused.value.message
     assert res["help"] is None and res["customers_per_day"] is None
     assert res["ingredients"]["sugar"] is None
     lemons = GameConfig.model_validate(default_config()).ingredients["lemons"]
@@ -343,8 +343,9 @@ def test_a_config_over_the_customers_cap_is_refused_with_its_figure():
     figure = max_expected_customers(GameConfig.validate_uncapped(data))
     assert figure > MAX_CUSTOMERS_PER_DAY
     res = client.post("/api/v1/config/preview", json=data).json()
-    verdict = client.post("/api/v1/config/validate", json=data).json()
-    assert res["valid"] is False and res["message"] == verdict["message"]
+    with pytest.raises(GameError) as refused:  # what `create_game` would say
+        parse_config(data)
+    assert res["valid"] is False and res["message"] == refused.value.message
     assert res["message"].startswith(f"Up to {figure:,} customers could come on the busiest day")
     assert "limit of 5,000 a day" in res["message"]
     # The figure comes with the refusal, so the screen shows how far over it is.
@@ -391,44 +392,6 @@ def test_the_config_preview_fixture_is_what_the_server_answers():
 )
 def test_the_config_preview_fixture_matches_the_frontend_copy():
     assert PREVIEW_FRONTEND_COPY.read_bytes() == PREVIEW_FIXTURE.read_bytes()
-
-
-def test_cup_cost_route_gives_the_engines_day_one_figures():
-    client = TestClient(app)
-    recipe = {"ice": 1, "sugar": 1, "lemons": 2}
-    small = {name: {"100": 1} for name in ("ice", "sugar", "lemons", "cups")}
-    body = {"config": default_config(), "purchases": small, "recipe": recipe}
-    res = client.post("/api/v1/config/cup-cost", json=body).json()
-    # 100 lemons make 50 cups at list price: 0.01 + 0.02 + 2 x 0.05 + 0.04.
-    assert res == {"spend": 12.0, "cups_possible": 50, "cost_per_cup": 0.17}
-
-    big = {name: {"700": 2} for name in ("ice", "sugar", "lemons", "cups")}
-    res = client.post("/api/v1/config/cup-cost", json={**body, "purchases": big}).json()
-    assert res["cups_possible"] == 700 and res["cost_per_cup"] == 0.14  # 20% off
-    # 1400 x (0.01 + 0.02 + 0.05 + 0.04) x 0.8: more than the 100 starting cash, still answered.
-    assert res["spend"] == 134.4
-
-    res = client.post("/api/v1/config/cup-cost", json={**body, "purchases": {}}).json()
-    assert res == {"spend": 0.0, "cups_possible": 0, "cost_per_cup": None}
-
-
-@pytest.mark.parametrize(
-    "change, message",
-    [
-        ({"purchases": {"lemons": {"100": -1}}}, "You can buy 0 to 100 packs"),
-        ({"purchases": {"lemons": {"7": 1}}}, "not sold in packs of 7"),
-        ({"recipe": {"ice": -1, "sugar": 1, "lemons": 2}}, "ice per cup must be between"),
-        ({"config": {**default_config(), "num_days": 31}}, "num_days"),
-    ],
-)
-def test_cup_cost_route_refuses_bad_input_with_the_games_message(change, message):
-    body = {
-        "config": default_config(),
-        "purchases": {},
-        "recipe": {"ice": 1, "sugar": 1, "lemons": 2},
-    }
-    res = TestClient(app).post("/api/v1/config/cup-cost", json={**body, **change})
-    assert res.status_code == 422 and message in res.json()["detail"]
 
 
 @pytest.mark.asyncio

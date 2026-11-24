@@ -116,8 +116,8 @@ else from the template needs the user's explicit OK.
   the cups the stock can make (held stock oldest first at the price paid, then today's
   packs dearest per unit first). The preview sends it, the day record keeps it (what the
   cups sold cost; with no sales, what the cups you could have made would have cost, or
-  null), and `POST /config/preview` gives the help its day-1 examples
-  (`POST /config/cup-cost` stays for older clients). The client computes none.
+  null), and `POST /config/preview` gives the help its day-1 examples.
+  The client computes none.
 - **`core/config_preview.py`** answers `POST /config/preview` (called, debounced, on every
   config edit): `ingredient_preview` (packs via `ingredients.pack_offers`, spoilage via
   `Ingredient.hazard`) needs only that ingredient's settings, so it is answered even

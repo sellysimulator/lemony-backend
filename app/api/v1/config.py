@@ -1,15 +1,14 @@
 """Default game configuration, the limits, and server-side checks for the config screen.
 
 `POST /config/preview` is what the config screen calls (debounced) on every edit: the
-verdict of `/config/validate` plus every figure the screen and its help show for the
+verdict `create_game` would give plus every figure the screen and its help show for the
 draft (`core/config_preview.py`, and the busiest day's customers,
-`demand.max_expected_customers`). `/config/validate` and `/config/cup-cost` stay for
-clients from before it.
+`demand.max_expected_customers`).
 """
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import ValidationError
 
 from ...core.config_model import GameConfig, IngredientConfig
@@ -21,15 +20,8 @@ from ...core.defaults import (
     default_config,
 )
 from ...core.demand import max_expected_customers
-from ...core.engine import LemonadeGame, PlanError
 from ...core.limits import public_limits
-from ...schemas.user import (
-    ConfigDefaultsResponse,
-    ConfigPreviewResponse,
-    ConfigValidateResponse,
-    CupCostRequest,
-    CupCostResponse,
-)
+from ...schemas.user import ConfigDefaultsResponse, ConfigPreviewResponse
 from ...services.game_service import GameError, parse_config
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -44,16 +36,6 @@ def get_defaults() -> ConfigDefaultsResponse:
         ingredient_names=list(INGREDIENT_NAMES),
         limits=public_limits(),
     )
-
-
-@router.post("/validate", response_model=ConfigValidateResponse)
-def validate_config(config: dict[str, Any]) -> ConfigValidateResponse:
-    """The same rules `create_game` applies, so the screen can say why before starting."""
-    try:
-        parse_config(config)
-    except GameError as exc:
-        return ConfigValidateResponse(valid=False, message=exc.message)
-    return ConfigValidateResponse(valid=True)
 
 
 def _customers_if_capped(config: dict[str, Any]) -> int | None:
@@ -105,24 +87,3 @@ def preview_config(config: dict[str, Any]) -> ConfigPreviewResponse:
         },
         help=config_help(parsed),
     )
-
-
-@router.post("/cup-cost", response_model=CupCostResponse)
-def cup_cost(request: CupCostRequest) -> CupCostResponse:
-    """What these packs cost on day 1, and the cups they make with this recipe at what cost
-    per cup: the engine's own figures, for the help's examples. Cash is not checked.
-
-    Refusals are 422 with the same player-facing sentence the game gives.
-    """
-    try:
-        config = parse_config(request.config)
-    except GameError as exc:
-        raise HTTPException(status_code=422, detail=exc.message) from None
-    game = LemonadeGame(config, seed=0)  # nothing is drawn: the seed plays no part
-    try:
-        game.validate_recipe(request.recipe)
-        spend, _, lots = game.purchase_cost(request.purchases)
-    except PlanError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    cups, cost = game.cup_cost(request.recipe, lots)
-    return CupCostResponse(spend=spend, cups_possible=cups, cost_per_cup=cost)

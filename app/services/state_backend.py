@@ -1,6 +1,6 @@
 """The live-state backend, and the switch between Redis and the database.
 
-`StateService` needs six operations (get / setex / delete / exists / lock) —
+`StateService` needs four operations (get / setex / delete / lock) —
 deliberately a subset of `redis.asyncio.Redis`, so the real client satisfies
 the protocol without an adapter.
 
@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol, Self
 
 import anyio.to_thread
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from ..models.live_game import LiveGame
@@ -39,7 +39,6 @@ class StateBackend(Protocol):
     async def get(self, key: str) -> str | bytes | None: ...
     async def setex(self, key: str, ttl: int, value: str) -> object: ...
     async def delete(self, *keys: str) -> int: ...
-    async def exists(self, key: str) -> int: ...
     def lock(self, key: str, timeout: int = 10) -> object: ...
 
 
@@ -137,10 +136,6 @@ class SqlStateBackend:
             db.commit()
             return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
-    def keys_sync(self) -> list[str]:
-        with self._session() as db:
-            return list(db.execute(select(LiveGame.state_key)).scalars())
-
     # ----------------------------------------------------------- protocol
     async def get(self, key: str) -> str | None:
         return await anyio.to_thread.run_sync(self._get_sync, key)
@@ -153,9 +148,6 @@ class SqlStateBackend:
         if not keys:
             return 0
         return await anyio.to_thread.run_sync(self._delete_sync, keys)
-
-    async def exists(self, key: str) -> int:
-        return 1 if await self.get(key) is not None else 0
 
     def lock(self, key: str, timeout: float = 10) -> _ProcessLock:
         lock = self._locks.get(key)

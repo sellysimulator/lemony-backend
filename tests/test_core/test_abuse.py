@@ -131,7 +131,7 @@ def test_app_answers_413_for_a_large_chunked_body() -> None:
         yield b'"}'
 
     response = TestClient(app).post(
-        "/api/v1/config/validate",
+        "/api/v1/config/preview",
         content=chunks(),
         headers={"content-type": "application/json"},
     )
@@ -145,7 +145,7 @@ def test_a_small_chunked_body_still_reaches_the_route() -> None:
         yield b"}"
 
     response = TestClient(app).post(
-        "/api/v1/config/validate",
+        "/api/v1/config/preview",
         content=chunks(),
         headers={"content-type": "application/json"},
     )
